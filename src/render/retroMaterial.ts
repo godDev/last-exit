@@ -17,9 +17,9 @@ export const shared = {
   uTime: { value: 0 },
   uFogColor: { value: new THREE.Color(0x04050a) },
   uFogDensity: { value: 0.0085 },
-  uAmbient: { value: new THREE.Color(0x0a0e1a) },
+  uAmbient: { value: new THREE.Color(0x0d1322) },
   uMoonDir: { value: new THREE.Vector3(0.4, 0.72, -0.55) }, // view space, rewritten per frame
-  uMoonColor: { value: new THREE.Color(0x1a2338) },
+  uMoonColor: { value: new THREE.Color(0x202c46) },
   /** Headlight emitters, view space. */
   uHeadL: { value: new THREE.Vector3() },
   uHeadR: { value: new THREE.Vector3() },
@@ -129,6 +129,7 @@ const FRAG = /* glsl */ `
 
     vec3 albedo = uColor * vTint;
     float alpha = uOpacity;
+    float roadReflect = 0.0;
 
     #ifdef USE_MAP
       vec4 texel = texture2D(uMap, vUv);
@@ -147,6 +148,18 @@ const FRAG = /* glsl */ `
       float rut = smoothstep(0.55, 0.0, abs(au - 1.6));
       albedo *= 1.0 - rut * 0.16;
 
+      // Tar repairs and hairline cracks break up the otherwise perfectly clean ribbon.
+      // They are procedural in route space, so they remain fixed to the road while moving.
+      float cell = hash21(floor(vec2(v * 0.115, u * 0.42)));
+      float crackWave = abs(sin(v * (0.38 + cell * 0.16) + sin(u * 2.1) * 1.8));
+      float crack = smoothstep(0.975, 0.998, crackWave) * step(0.69, cell) * step(au, 3.35);
+      albedo *= 1.0 - crack * 0.38;
+
+      // Pale aggregate on the shoulder catches the edge of the beam one pebble at a time.
+      float shoulder = smoothstep(3.8, 5.8, au) * (1.0 - smoothstep(6.0, 8.0, au));
+      float pebble = step(0.84, hash21(floor(vec2(u * 4.6, v * 3.7))));
+      albedo += vec3(0.055, 0.047, 0.034) * shoulder * pebble;
+
       // dashed yellow centre line: 3 m stripe every 12 m
       float dash = step(mod(v, 12.0), 3.0);
       float centre = step(au, 0.09) * dash;
@@ -156,6 +169,7 @@ const FRAG = /* glsl */ `
       float wear = 0.55 + 0.45 * hash21(floor(vec2(v * 0.7, u)));
       albedo = mix(albedo, vec3(0.62, 0.52, 0.13) * wear, centre);
       albedo = mix(albedo, vec3(0.60, 0.58, 0.54) * wear, edge);
+      roadReflect = (centre * 0.34 + edge * 0.26) * wear;
     #endif
 
     #ifdef EMISSIVE
@@ -167,6 +181,11 @@ const FRAG = /* glsl */ `
       light += headlight(uHeadR, N);
       light += uCabinLight * uCabin;
       vec3 lit = albedo * light;
+      #ifdef ROAD_MARKINGS
+        // Retroreflective paint returns a small warm flash directly to the driver.
+        float beamFacing = smoothstep(0.10, 0.92, 1.0 - abs(vPosView.x) / max(1.0, -vPosView.z));
+        lit += uHeadColor * roadReflect * beamFacing * 0.16;
+      #endif
     #endif
 
     // exp2 fog straight to night. Draw distance is an art decision here, not a budget one.

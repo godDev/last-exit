@@ -13,7 +13,7 @@ export interface Line {
 
 export const STRINGS: Record<string, Line> = {
   'boot.note': {
-    en: 'W / S  throttle and brake\nA / D  steer\nSPACE  glance at the mirror   Q / E  look around\nR  radio   [ ]  tune   T  seek\nH  high beams   P  autopilot   C  inspect the cab\nF3  diagnostics',
+    en: 'W  throttle / brake from reverse   S  brake / reverse\nA / D  steer left / right\nSPACE  glance at the mirror   Q / E  look around\nR  radio   [ ]  tune   T  seek\nH  high beams   P  autopilot   C  inspect the cab\nF3  diagnostics',
     ru: 'W / S  газ и тормоз\nA / D  руль\nSPACE  взгляд в зеркало   Q / E  осмотреться\nR  радио   [ ]  настройка   T  поиск\nH  дальний свет   P  автопилот   C  осмотр кабины\nF3  диагностика',
   },
 

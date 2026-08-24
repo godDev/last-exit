@@ -30,6 +30,20 @@ interface Slot {
   label?: string;
 }
 
+export interface PropCollision {
+  normal: THREE.Vector3;
+  penetration: number;
+  kind: Kind;
+}
+
+const COLLIDER_RADIUS: Partial<Record<Kind, number>> = {
+  pole: 0.28,
+  delineator: 0.13,
+  scrub: 0.72,
+  mile: 0.28,
+  sign: 0.72,
+};
+
 /**
  * Attach a flat vertex colour so parts can be merged into one draw call.
  *
@@ -158,6 +172,7 @@ export class PropField {
   private readonly active = new Map<string, Slot>();
   private readonly scrubVariants: THREE.BufferGeometry[];
   private lastFirst = Number.NaN;
+  private readonly collisionNormal = new THREE.Vector3();
 
   /**
    * @param mileZero route distance, in metres, that the signage should call mile 0.
@@ -324,6 +339,30 @@ export class PropField {
       }
       this.active.set(key, slot);
     }
+  }
+
+  /** Broad-phase and circle collision against only the small set of pooled active props. */
+  collisionAt(position: THREE.Vector3, busRadius: number): PropCollision | null {
+    let best: PropCollision | null = null;
+    let deepest = 0;
+    for (const slot of this.active.values()) {
+      const baseRadius = COLLIDER_RADIUS[slot.kind];
+      if (!baseRadius || !slot.object.visible) continue;
+      const radius = baseRadius * Math.max(slot.object.scale.x, slot.object.scale.z);
+      const dx = position.x - slot.object.position.x;
+      const dz = position.z - slot.object.position.z;
+      const reach = busRadius + radius;
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= reach * reach) continue;
+
+      const distance = Math.sqrt(Math.max(d2, 0.0001));
+      const penetration = reach - distance;
+      if (penetration <= deepest) continue;
+      deepest = penetration;
+      this.collisionNormal.set(dx / distance, 0, dz / distance);
+      best = { normal: this.collisionNormal.clone(), penetration, kind: slot.kind };
+    }
+    return best;
   }
 
   private dress(slot: Slot, index: number, sub: number): boolean {

@@ -31,20 +31,43 @@ const DOME_FRAG = /* glsl */ `
     return fract((p.x + p.y) * p.z);
   }
 
+  float ridge(float x) {
+    float broad = sin(x * 2.7 + 0.8) * 0.46 + sin(x * 6.1 - 1.4) * 0.22;
+    float detail = sin(x * 13.7 + 2.1) * 0.08 + sin(x * 24.0) * 0.035;
+    return broad + detail;
+  }
+
   void main() {
     float h = clamp(vDir.y, -1.0, 1.0);
     vec3 col = mix(uHorizon, uZenith, smoothstep(-0.05, 0.55, h));
 
+    // Several broad, almost invisible airglow bands give the clear desert atmosphere
+    // depth without turning the sky into a conventional cloudy backdrop.
+    float airBand = sin(atan(vDir.x, vDir.z) * 3.0 + h * 18.0) * 0.5 + 0.5;
+    float airMask = smoothstep(0.02, 0.16, h) * (1.0 - smoothstep(0.18, 0.42, h));
+    col += vec3(0.010, 0.014, 0.025) * airBand * airMask;
+
     // the galactic band, running high and to one side
     float band = 1.0 - abs(dot(normalize(vDir), normalize(vec3(0.62, 0.55, -0.56))));
     float milky = smoothstep(0.62, 1.0, band) * smoothstep(-0.02, 0.3, h);
-    float mottle = 0.55 + 0.45 * hash13(floor(vDir * 90.0));
-    col += vec3(0.055, 0.058, 0.075) * milky * mottle;
+    float mottle = 0.48 + 0.52 * hash13(floor(vDir * 90.0));
+    float dustLane = 0.68 + 0.32 * sin(vDir.x * 47.0 + vDir.z * 31.0);
+    col += vec3(0.060, 0.064, 0.086) * milky * mottle * dustLane;
 
     // sodium haze of a town somewhere below the horizon
     float townDir = max(0.0, dot(normalize(vec3(vDir.x, 0.0, vDir.z)), vec3(0.0, 0.0, 1.0)));
     float townGlow = pow(townDir, 12.0) * smoothstep(0.16, -0.02, h);
     col += uGlow * townGlow * uGlowAmount;
+
+    // Two distant desert ridges live in the sky shader, so they cost no world geometry
+    // and remain perfectly stable through floating-origin rebases.
+    float azimuth = atan(vDir.x, vDir.z);
+    float farLine = 0.018 + ridge(azimuth + 0.7) * 0.018;
+    float nearLine = 0.002 + ridge(azimuth * 0.83 - 1.8) * 0.031;
+    float farRidge = 1.0 - smoothstep(farLine - 0.006, farLine + 0.004, h);
+    float nearRidge = 1.0 - smoothstep(nearLine - 0.006, nearLine + 0.004, h);
+    col = mix(col, vec3(0.018, 0.021, 0.032), farRidge * 0.72);
+    col = mix(col, vec3(0.008, 0.009, 0.014), nearRidge * 0.90);
 
     gl_FragColor = vec4(col, 1.0);
   }
@@ -69,8 +92,9 @@ const STAR_FRAG = /* glsl */ `
   precision highp float;
   varying float vMag;
   void main() {
-    // square points on purpose: at 480x270 a star is one or two pixels anyway
-    gl_FragColor = vec4(vec3(0.85, 0.88, 1.0) * vMag, 1.0);
+    vec2 p = gl_PointCoord * 2.0 - 1.0;
+    float core = 1.0 - smoothstep(0.18, 1.0, dot(p, p));
+    gl_FragColor = vec4(vec3(0.82, 0.88, 1.0) * vMag * (0.65 + core * 0.7), core);
   }
 `;
 
@@ -118,7 +142,7 @@ export class Sky {
       pos[i * 3 + 1] = y * 900;
       pos[i * 3 + 2] = Math.sin(a) * r * 900;
       const bright = rand();
-      size[i] = bright > 0.985 ? 3 : bright > 0.9 ? 2 : 1;
+      size[i] = bright > 0.985 ? 4 : bright > 0.9 ? 2.5 : 1.4;
       phase[i] = rand();
     }
     const starGeo = new THREE.BufferGeometry();
@@ -151,6 +175,23 @@ export class Sky {
     this.moon.renderOrder = -998;
     this.moon.frustumCulled = false;
     this.group.add(this.moon);
+
+    const halo = new THREE.Mesh(
+      new THREE.CircleGeometry(72, 28),
+      new THREE.ShaderMaterial({
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        depthTest: false,
+        toneMapped: false,
+        vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); gl_Position.z=gl_Position.w; }`,
+        fragmentShader: `precision highp float; varying vec2 vUv; void main(){ float d=length(vUv-0.5)*2.0; float a=pow(max(0.0,1.0-d),2.6)*0.16; gl_FragColor=vec4(0.28,0.38,0.66,a); }`,
+      }),
+    );
+    halo.position.copy(this.moon.position).multiplyScalar(0.999);
+    halo.renderOrder = -999;
+    halo.frustumCulled = false;
+    this.group.add(halo);
 
     this.group.renderOrder = -1000;
     this.group.frustumCulled = false;

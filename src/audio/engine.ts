@@ -121,7 +121,7 @@ export class EngineAudio {
       this.oscGain[i].gain.setTargetAtTime(base * (0.55 + load * 0.55), now, smooth);
     }
 
-    const speed = Math.min(1, bus.speed / 29);
+    const speed = Math.min(1, Math.abs(bus.speed) / 29);
     this.tyres.gain.setTargetAtTime(speed * speed * 0.16, now, smooth);
     this.tyreFilter.frequency.setTargetAtTime(300 + speed * 700, now, smooth);
     this.wind.gain.setTargetAtTime(Math.pow(speed, 3) * 0.075, now, smooth);
@@ -131,7 +131,7 @@ export class EngineAudio {
 
     // individual stones, not a wash of noise
     if (bus.rumble > 0.15) {
-      this.nextGravel -= dt * (4 + bus.rumble * bus.speed * 1.4);
+      this.nextGravel -= dt * (4 + bus.rumble * Math.abs(bus.speed) * 1.4);
       if (this.nextGravel <= 0) {
         this.nextGravel = 0.3 + Math.random() * 0.5;
         noiseBurst(this.audio.ctx, this.bus, now, 0.05, 900 + Math.random() * 2200, 3, 0.09);

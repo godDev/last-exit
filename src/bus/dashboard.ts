@@ -230,6 +230,37 @@ export class Dashboard {
 
     this.group.add(cowl, fascia, knees);
 
+    // Layered vinyl panels, seams and visible fasteners keep the broad dashboard from
+    // reading as three primitive boxes from the driver's seat.
+    const seamMaterial = createRetroMaterial({ color: 0x4a4337, fogScale: 0, ambientBoost: 2.2, cabin: 0.9, snap: 0.15 });
+    for (const x of [-1.02, -0.46, 0.36, 0.98]) {
+      const seam = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.27, 0.012), seamMaterial);
+      seam.position.set(x, 1.52, DASH_FACE_Z + 0.052);
+      seam.rotation.x = 0.18;
+      this.group.add(seam);
+    }
+    for (const x of [-1.12, -0.34, 0.42, 1.12]) {
+      const screw = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.008, 8), seamMaterial);
+      screw.rotation.x = Math.PI / 2;
+      screw.position.set(x, 1.61, DASH_FACE_Z + 0.063);
+      this.group.add(screw);
+    }
+
+    // Two recessed demister vents with individual slats.
+    for (const ventX of [-1.02, 0.72]) {
+      const vent = new THREE.Group();
+      vent.position.set(ventX, 1.735, DASH_Z + 0.055);
+      vent.rotation.x = -0.12;
+      const recess = new THREE.Mesh(new THREE.BoxGeometry(0.31, 0.018, 0.085), trim);
+      vent.add(recess);
+      for (let i = -3; i <= 3; i++) {
+        const slat = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.012, 0.07), seamMaterial);
+        slat.position.x = i * 0.038;
+        vent.add(slat);
+      }
+      this.group.add(vent);
+    }
+
     // --- the instrument pod ---------------------------------------------------
     // The housing goes 11 cm along -normal, i.e. behind the dial faces. Put it at the same
     // point as the cluster and it hides every gauge in the bus.
@@ -265,6 +296,17 @@ export class Dashboard {
       this.revNeedle,
     );
     cluster.add(speedFace, revFace);
+
+    // Auxiliary pressure and temperature dials complete the heavy-vehicle cluster.
+    const auxNeedleA = new THREE.Mesh();
+    const auxNeedleB = new THREE.Mesh();
+    const air = this.buildGauge(faceTexture('AIR', 4, 2, 12, 'BAR'), 0.045, 0.025, auxNeedleA);
+    air.position.y = -0.064;
+    const temp = this.buildGauge(faceTexture('WATER', 4, 2, 120, 'C'), 0.045, 0.135, auxNeedleB);
+    temp.position.y = -0.068;
+    auxNeedleA.rotation.z = -0.35;
+    auxNeedleB.rotation.z = 0.4;
+    cluster.add(air, temp);
 
     // odometer, set into the face of the speedometer like the real thing
     this.odoTexture = ledPanel('00000.0', '#cfc6b2', 128, 32);
@@ -335,6 +377,18 @@ export class Dashboard {
       this.group.add(rocker);
     }
 
+    // Coloured warning telltales and engraved label bars below the switch bank.
+    for (let i = 0; i < 4; i++) {
+      const colour = [0xb83222, 0xd18a24, 0x4a9b56, 0xb83222][i];
+      const telltale = new THREE.Mesh(
+        new THREE.CircleGeometry(0.009, 8),
+        createRetroMaterial({ color: colour, mode: 'emissive', emissive: i === 2 ? 0.7 : 0.25, snap: 0.15 }),
+      );
+      telltale.position.set(0.035 + i * 0.055, 1.67, DASH_FACE_Z + 0.058);
+      telltale.rotation.x = 0.18;
+      this.group.add(telltale);
+    }
+
     // --- the column ------------------------------------------------------------
     // Runs down and forward from the hub, so the wheel is fitted to a shaft rather than
     // stuck onto the dash.
@@ -391,10 +445,20 @@ export class Dashboard {
     });
 
     const rim = new THREE.Mesh(
-      new THREE.TorusGeometry(WHEEL_RADIUS, 0.021, 6, 26),
+      new THREE.TorusGeometry(WHEEL_RADIUS, 0.024, 8, 32),
       rimMaterial,
     );
     this.wheel.add(rim);
+
+    // Leather wrap seam: small raised stitches around the driver's side of the rim.
+    const stitchMaterial = createRetroMaterial({ color: 0x8a7353, fogScale: 0, ambientBoost: 2.8, cabin: 1.2, snap: 0.1 });
+    for (let i = 0; i < 18; i++) {
+      const a = (i / 18) * Math.PI * 2;
+      const stitch = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.005, 0.006), stitchMaterial);
+      stitch.position.set(Math.cos(a) * WHEEL_RADIUS, Math.sin(a) * WHEEL_RADIUS, 0.024);
+      stitch.rotation.z = a;
+      this.wheel.add(stitch);
+    }
 
     const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.06, 0.05, 10), trim);
     hub.rotation.x = Math.PI / 2;
@@ -404,6 +468,19 @@ export class Dashboard {
     pad.rotation.x = Math.PI / 2;
     pad.position.z = 0.032;
     this.wheel.add(pad);
+
+    const badge = new THREE.Mesh(
+      new THREE.CircleGeometry(0.032, 12),
+      createRetroMaterial({ color: 0x6b5b3e, fogScale: 0, ambientBoost: 2.8, cabin: 1, snap: 0.1 }),
+    );
+    badge.position.z = 0.041;
+    this.wheel.add(badge);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const bolt = new THREE.Mesh(new THREE.CircleGeometry(0.006, 6), stitchMaterial);
+      bolt.position.set(Math.cos(a) * 0.05, Math.sin(a) * 0.05, 0.043);
+      this.wheel.add(bolt);
+    }
 
     // Three spokes at two, six and ten o'clock, which leaves twelve open — that gap is
     // what the driver reads the gauges through.
@@ -442,6 +519,28 @@ export class Dashboard {
     bezel.position.z = 0.004;
     group.add(bezel);
 
+    const innerBezel = new THREE.Mesh(
+      new THREE.TorusGeometry(radius * 0.88, 0.0035, 4, 20),
+      createRetroMaterial({ color: 0x706556, fogScale: 0, ambientBoost: 2.4, cabin: 1, snap: 0.12 }),
+    );
+    innerBezel.position.z = 0.006;
+    group.add(innerBezel);
+
+    // Convex-looking instrument glass and a small reflected highlight.
+    const gaugeGlass = new THREE.Mesh(
+      new THREE.CircleGeometry(radius * 0.86, 24),
+      createRetroMaterial({ color: 0x9cb2bd, mode: 'emissive', emissive: 0.08, transparent: true, opacity: 0.11, depthWrite: false, snap: 0.1 }),
+    );
+    gaugeGlass.position.z = 0.012;
+    group.add(gaugeGlass);
+    const highlight = new THREE.Mesh(
+      new THREE.PlaneGeometry(radius * 0.62, 0.006),
+      createRetroMaterial({ color: 0xb8d7e2, mode: 'emissive', emissive: 0.32, transparent: true, opacity: 0.28, depthWrite: false, snap: 0.1 }),
+    );
+    highlight.position.set(-radius * 0.13, radius * 0.42, 0.014);
+    highlight.rotation.z = -0.24;
+    group.add(highlight);
+
     needle.geometry = new THREE.BoxGeometry(0.008, radius * 0.86, 0.004);
     needle.material = createRetroMaterial({
       color: 0xd8452a,
@@ -453,6 +552,14 @@ export class Dashboard {
     needle.geometry.translate(0, radius * 0.4, 0);
     needle.position.z = 0.009;
     group.add(needle);
+
+    const pin = new THREE.Mesh(
+      new THREE.CylinderGeometry(radius * 0.075, radius * 0.09, 0.012, 10),
+      createRetroMaterial({ color: 0x27221c, fogScale: 0, ambientBoost: 2.2, cabin: 1, snap: 0.1 }),
+    );
+    pin.rotation.x = Math.PI / 2;
+    pin.position.z = 0.016;
+    group.add(pin);
 
     return group;
   }
@@ -472,7 +579,7 @@ export class Dashboard {
     this.revNeedle.rotation.z = GAUGE_START + (GAUGE_END - GAUGE_START) * revT;
 
     // rotation order is XYZ, so the spin about Z happens before the column tilt about X
-    this.wheel.rotation.z = -data.wheelAngle * 2.6;
+    this.wheel.rotation.z = data.wheelAngle * 2.6;
 
     if (data.clock !== this.lastClock) {
       this.lastClock = data.clock;

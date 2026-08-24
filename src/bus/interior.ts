@@ -86,9 +86,21 @@ function buildShell(): THREE.BufferGeometry {
   // floor, with a raised aisle strip so the ribbed rubber reads at a glance
   parts.push(box(HALF_WIDTH * 2, 0.08, length, 0, FLOOR_Y - 0.04, midZ, 0x26221c));
   parts.push(box(0.52, 0.02, length - 1.2, 0, FLOOR_Y + 0.01, midZ + 0.2, RUBBER));
+  // moulded anti-slip ribs and aluminium aisle edging
+  for (let z = front + 0.8; z < back - 0.45; z += 0.22) {
+    parts.push(box(0.46, 0.008, 0.018, 0, FLOOR_Y + 0.024, z, 0x35312b));
+  }
+  for (const side of [-1, 1]) {
+    parts.push(box(0.025, 0.025, length - 1.2, side * 0.28, FLOOR_Y + 0.035, 0.2, 0x625b4d));
+  }
 
   // roof and the luggage racks under it
   parts.push(box(HALF_WIDTH * 2, 0.08, length, 0, ROOF_Y + 0.04, midZ, 0x232019));
+  // longitudinal ceiling seams and a central service channel
+  parts.push(box(0.38, 0.035, length - 1.0, 0, ROOF_Y - 0.025, 0.2, 0x191713));
+  for (const side of [-1, 1]) {
+    parts.push(box(0.018, 0.025, length - 1.0, side * 0.23, ROOF_Y - 0.052, 0.2, 0x4b4439));
+  }
   for (const side of [-1, 1]) {
     parts.push(box(0.46, 0.06, length - 3.4, side * 0.98, ROOF_Y - 0.34, midZ + 0.6, TRIM));
     parts.push(box(0.05, 0.3, length - 3.4, side * 0.75, ROOF_Y - 0.2, midZ + 0.6, TRIM));
@@ -99,6 +111,12 @@ function buildShell(): THREE.BufferGeometry {
     const x = side * HALF_WIDTH;
     parts.push(box(0.07, 0.62, length, x, FLOOR_Y + 0.31, midZ, PANEL));
     parts.push(box(0.07, 0.5, length, x, ROOF_Y - 0.25, midZ, PANEL));
+    // waist rail, lower kick strip and stamped panel dividers
+    parts.push(box(0.085, 0.055, length - 0.4, x - side * 0.012, FLOOR_Y + 0.62, 0.1, 0x50483c));
+    parts.push(box(0.085, 0.045, length - 0.4, x - side * 0.012, FLOOR_Y + 0.08, 0.1, 0x171511));
+    for (let z = front + 0.72; z < back - 0.4; z += 0.82) {
+      parts.push(box(0.085, 0.5, 0.018, x - side * 0.012, FLOOR_Y + 0.32, z, 0x171511));
+    }
     // window pillars
     for (let i = 0; i < 8; i++) {
       const z = front + 2.2 + i * 1.28;
@@ -114,6 +132,11 @@ function buildShell(): THREE.BufferGeometry {
   // the step well and door on the kerb side
   parts.push(box(0.06, 1.95, 0.9, HALF_WIDTH - 0.02, FLOOR_Y + 0.98, front + 1.35, 0x201d18));
   parts.push(box(0.6, 0.16, 0.86, HALF_WIDTH - 0.36, FLOOR_Y - 0.28, front + 1.35, 0x1b1815));
+  // door frame, latch and yellow passenger grab handle
+  parts.push(box(0.075, 1.72, 0.045, HALF_WIDTH - 0.07, FLOOR_Y + 1.02, front + 0.92, 0x4d463b));
+  parts.push(box(0.075, 1.72, 0.045, HALF_WIDTH - 0.07, FLOOR_Y + 1.02, front + 1.78, 0x4d463b));
+  parts.push(box(0.09, 0.18, 0.035, HALF_WIDTH - 0.12, FLOOR_Y + 1.0, front + 1.0, 0x8d742c));
+  parts.push(box(0.055, 0.72, 0.055, HALF_WIDTH - 0.3, FLOOR_Y + 1.38, front + 1.82, 0xb28a30));
 
   // rear bulkhead with the emergency door, left open as a frame around the back window
   parts.push(box(HALF_WIDTH * 2, 0.5, 0.09, 0, FLOOR_Y + 0.25, back - 0.05, PANEL));

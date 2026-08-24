@@ -40,7 +40,7 @@ npm run build
 
 | | |
 |---|---|
-| `W` / `S` | throttle / brake |
+| `W` / `S` | throttle / brake; hold `S` after stopping to reverse |
 | `A` / `D` | steer |
 | `SPACE` | glance at the mirror (hold) |
 | `Q` / `E` | look around the cab |

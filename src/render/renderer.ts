@@ -23,7 +23,7 @@ export class Renderer {
 
     this.gl = new THREE.WebGLRenderer({
       canvas,
-      antialias: false,
+      antialias: true,
       powerPreference: 'high-performance',
       stencil: false,
     });
@@ -33,11 +33,12 @@ export class Renderer {
     this.gl.autoClear = true;
 
     this.target = new THREE.WebGLRenderTarget(this.width, this.height, {
-      minFilter: THREE.NearestFilter,
-      magFilter: THREE.NearestFilter,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
       depthBuffer: true,
       colorSpace: THREE.LinearSRGBColorSpace,
     });
+    this.target.samples = 4;
 
     this.post = new PostPass(this.target.texture);
     this.resize();
@@ -54,10 +55,10 @@ export class Renderer {
     this.gl.setSize(w, h, false);
 
     this.height = settings.renderHeight;
-    this.width = Math.min(960, Math.round((this.height * w) / h / 2) * 2);
+    this.width = Math.min(1440, Math.round((this.height * w) / h / 2) * 2);
     this.target.setSize(this.width, this.height);
     this.post.setSource(this.target.texture, this.width, this.height);
-    shared.uSnapRes.value.set(this.width * 0.66, this.height * 0.66);
+    shared.uSnapRes.value.set(this.width * 0.86, this.height * 0.86);
   }
 
   /**
@@ -70,7 +71,7 @@ export class Renderer {
   present(scene: THREE.Scene, camera: THREE.Camera, elapsed: number): void {
     shared.uTime.value = elapsed;
     this.post.time = elapsed;
-    this.post.retro = settings.retro;
+    this.post.retro = settings.retro * 0.72;
 
     this.gl.setRenderTarget(this.target);
     this.gl.clear();

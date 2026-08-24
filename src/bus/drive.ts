@@ -15,7 +15,9 @@ export { METRES_PER_MILE } from '../core/units';
 
 const LENGTH = 12.2;
 const MAX_SPEED = 29.5;         // ~66 mph
+const MAX_REVERSE_SPEED = 6.2;  // ~14 mph, governed coach reverse gear
 const ACCEL = 1.15;             // m/s^2, loaded diesel
+const REVERSE_ACCEL = 0.82;
 const BRAKE = 4.2;
 const ENGINE_BRAKE = 0.35;
 const DRAG = 0.00055;
@@ -48,7 +50,7 @@ export class Bus {
   lateral = 0;
   surface: Surface = 'asphalt';
 
-  gear = 1;
+  gear: number | 'R' = 1;
   rpm = 600;
   throttle = 0;
   braking = 0;
@@ -59,6 +61,12 @@ export class Bus {
   roll = 0;
   heave = 0;
   rumble = 0;
+
+  /** Short impulses layered on top of the normal suspension motion after a collision. */
+  private impactPitch = 0;
+  private impactRoll = 0;
+  private impactHeave = 0;
+  private impactCooldown = 0;
 
   private stationCursor = 0;
   private lastAccel = 0;
@@ -119,9 +127,12 @@ export class Bus {
   }
 
   update(dt: number, input: Input): void {
+    this.impactCooldown = Math.max(0, this.impactCooldown - dt);
     this.throttle = input.isDown('throttle') ? 1 : 0;
     this.braking = input.isDown('brake') ? 1 : 0;
-    let steer = input.axis('left', 'right');
+    // Positive wheel angle is a left turn, matching both heading convention and the
+    // counter-clockwise motion of the wheel as seen by the driver.
+    let steer = input.axis('right', 'left');
 
     if (this.autopilot) {
       this.steerToLane();
@@ -136,24 +147,63 @@ export class Bus {
     } else if (steer !== 0) {
       this.wheelAngle = THREE.MathUtils.clamp(this.wheelAngle + steer * WHEEL_RATE * dt, -1, 1);
     } else {
-      const decay = WHEEL_RETURN * dt * (0.35 + Math.min(1, this.speed / 14));
+      const decay = WHEEL_RETURN * dt * (0.35 + Math.min(1, Math.abs(this.speed) / 14));
       this.wheelAngle -= Math.sign(this.wheelAngle) * Math.min(Math.abs(this.wheelAngle), decay);
     }
 
     // --- longitudinal -------------------------------------------------------
     const grip = this.surface === 'asphalt' ? 1 : this.surface === 'shoulder' ? 0.82 : 0.55;
-    let accel = this.throttle * ACCEL * grip;
-    accel -= this.braking * BRAKE;
-    if (this.throttle === 0 && this.braking === 0) accel -= ENGINE_BRAKE;
-    accel -= DRAG * this.speed * this.speed;
-    if (this.surface !== 'asphalt') accel -= this.surface === 'desert' ? 0.95 : 0.45;
+    let accel = 0;
+    if (this.autopilot) {
+      accel += this.throttle * ACCEL * grip;
+      accel -= this.braking * BRAKE;
+    } else {
+      const forwardPedal = input.isDown('throttle');
+      const reversePedal = input.isDown('brake');
+      if (this.speed > 0.08) {
+        accel += forwardPedal ? ACCEL * grip : 0;
+        accel -= reversePedal ? BRAKE : 0;
+      } else if (this.speed < -0.08) {
+        accel -= reversePedal ? REVERSE_ACCEL * grip : 0;
+        accel += forwardPedal ? BRAKE : 0;
+      } else if (reversePedal && !forwardPedal) {
+        accel = -REVERSE_ACCEL * grip;
+      } else if (forwardPedal && !reversePedal) {
+        accel = ACCEL * grip;
+      }
 
-    this.speed = THREE.MathUtils.clamp(this.speed + accel * dt, 0, MAX_SPEED * grip);
+      // Public pedal values describe engine load and service braking, not raw keys.
+      // In reverse S is the accelerator and W becomes the brake.
+      this.throttle = this.speed < -0.08 ? (reversePedal ? 1 : 0) : (forwardPedal ? 1 : 0);
+      this.braking = this.speed > 0.08
+        ? (reversePedal ? 1 : 0)
+        : this.speed < -0.08
+          ? (forwardPedal ? 1 : 0)
+          : 0;
+    }
+
+    if (this.throttle === 0 && this.braking === 0 && Math.abs(this.speed) > 0.01) {
+      accel -= Math.sign(this.speed) * ENGINE_BRAKE;
+    }
+    accel -= Math.sign(this.speed) * DRAG * this.speed * this.speed;
+    if (this.surface !== 'asphalt' && Math.abs(this.speed) > 0.01) {
+      accel -= Math.sign(this.speed) * (this.surface === 'desert' ? 0.95 : 0.45);
+    }
+
+    const previousSpeed = this.speed;
+    this.speed = THREE.MathUtils.clamp(
+      this.speed + accel * dt,
+      -MAX_REVERSE_SPEED * grip,
+      MAX_SPEED * grip,
+    );
+    // Braking must stop at zero instead of instantly crossing into the opposite gear.
+    if ((previousSpeed > 0.08 && this.speed < 0) || (previousSpeed < -0.08 && this.speed > 0)) this.speed = 0;
     this.lastAccel += (accel - this.lastAccel) * Math.min(1, dt * 6);
 
     // --- yaw ----------------------------------------------------------------
     const wanted = this.wheelAngle * MAX_CURVATURE * this.speed;
-    const cap = this.speed > 1 ? MAX_LATERAL_G / this.speed : 0.9;
+    const absSpeed = Math.abs(this.speed);
+    const cap = absSpeed > 1 ? MAX_LATERAL_G / absSpeed : 0.9;
     this.yawRate = THREE.MathUtils.clamp(wanted, -cap, cap);
     this.heading += this.yawRate * dt;
 
@@ -163,6 +213,36 @@ export class Bus {
     this.trackRoute();
     this.updateDrivetrain(dt);
     this.updateBody(dt);
+  }
+
+  /**
+   * Resolve an impact against a static obstacle. The bus has a scalar forward velocity,
+   * so the sideways impulse becomes displacement and yaw while the forward component is
+   * removed as lost speed. Returns true only for the first frame of a distinct impact.
+   */
+  impact(normal: THREE.Vector3, penetration: number): boolean {
+    // Always separate the body so it cannot remain embedded when the cooldown is active.
+    this.position.addScaledVector(normal, Math.max(0.03, penetration + 0.04));
+    if (this.impactCooldown > 0) return false;
+
+    this.updateFrame();
+    const side = THREE.MathUtils.clamp(normal.dot(this.right), -1, 1);
+    const frontal = Math.max(0, -normal.dot(this.forward));
+    const severity = THREE.MathUtils.clamp(Math.abs(this.speed) / 18, 0.18, 1);
+
+    // A glancing scrape retains more momentum; a square hit sheds most of it.
+    const retained = THREE.MathUtils.clamp(0.58 - frontal * 0.32 + Math.abs(side) * 0.18, 0.18, 0.72);
+    this.speed *= retained;
+    this.heading += side * (0.055 + severity * 0.09);
+    this.wheelAngle = THREE.MathUtils.clamp(this.wheelAngle + side * 0.38, -1, 1);
+    this.yawRate += side * severity * 0.42;
+
+    this.impactPitch -= (0.025 + frontal * 0.055) * severity;
+    this.impactRoll += side * (0.045 + severity * 0.075);
+    this.impactHeave += 0.025 + severity * 0.045;
+    this.rumble = Math.max(this.rumble, 0.9);
+    this.impactCooldown = 0.42;
+    return true;
   }
 
   /** Project the free-moving bus back onto the route to get mile and lane position. */
@@ -209,37 +289,51 @@ export class Bus {
   }
 
   private updateDrivetrain(dt: number): void {
-    const targetRpm = Math.max(560, this.speed * RPM_PER_MS * GEAR_RATIOS[this.gear]);
+    const absSpeed = Math.abs(this.speed);
+    if (this.speed < -0.05) {
+      this.gear = 'R';
+      const targetRpm = Math.max(620, absSpeed * RPM_PER_MS * 3.9);
+      this.rpm += (targetRpm - this.rpm) * Math.min(1, dt * 5);
+      return;
+    }
+    if (this.gear === 'R') this.gear = 1;
+    const targetRpm = Math.max(560, absSpeed * RPM_PER_MS * GEAR_RATIOS[this.gear]);
     this.rpm += (targetRpm - this.rpm) * Math.min(1, dt * 5);
     if (this.rpm > 2150 && this.gear < GEAR_RATIOS.length - 1) this.gear++;
     else if (this.rpm < 1050 && this.gear > 1) this.gear--;
   }
 
   private updateBody(dt: number): void {
-    this.bobPhase += dt * (2.2 + this.speed * 0.24);
+    const absSpeed = Math.abs(this.speed);
+    this.bobPhase += dt * (2.2 + absSpeed * 0.24);
 
     // expansion joints in the concrete, felt more than heard
     const seam = fbm1(this.distance * 0.09, this.seed + 4001, 2);
     const gravel = this.surface === 'asphalt' ? 0 : this.surface === 'shoulder' ? 0.55 : 1;
-    this.rumble += (gravel * Math.min(1, this.speed / 12) - this.rumble) * Math.min(1, dt * 8);
+    this.rumble += (gravel * Math.min(1, absSpeed / 12) - this.rumble) * Math.min(1, dt * 8);
 
-    const speedScale = Math.min(1, this.speed / 20);
+    const speedScale = Math.min(1, absSpeed / 20);
+    this.impactPitch *= Math.pow(0.035, dt);
+    this.impactRoll *= Math.pow(0.045, dt);
+    this.impactHeave *= Math.pow(0.025, dt);
+
     const targetHeave =
       seam * 0.022 * speedScale +
       Math.sin(this.bobPhase * 1.7) * 0.008 * speedScale +
-      (Math.random() - 0.5) * 0.05 * this.rumble;
+      (Math.random() - 0.5) * 0.05 * this.rumble +
+      this.impactHeave;
     this.heave += (targetHeave - this.heave) * Math.min(1, dt * 12);
 
-    const targetPitch = -this.lastAccel * 0.012 + Math.sin(this.bobPhase * 0.9) * 0.0025;
+    const targetPitch = -this.lastAccel * 0.012 + Math.sin(this.bobPhase * 0.9) * 0.0025 + this.impactPitch;
     this.pitch += (targetPitch - this.pitch) * Math.min(1, dt * 5);
 
     const latG = this.yawRate * this.speed;
-    const targetRoll = -latG * 0.02 + (Math.random() - 0.5) * 0.006 * this.rumble;
+    const targetRoll = -latG * 0.02 + (Math.random() - 0.5) * 0.006 * this.rumble + this.impactRoll;
     this.roll += (targetRoll - this.roll) * Math.min(1, dt * 5);
   }
 
   get miles(): number { return (this.distance - this.startDistance) / METRES_PER_MILE; }
-  get speedMph(): number { return this.speed * MPH_PER_MS; }
+  get speedMph(): number { return Math.abs(this.speed) * MPH_PER_MS; }
 
   /** World-space point from bus-local (right, up, forward) metres. */
   localToWorld(right: number, up: number, forward: number, out = new THREE.Vector3()): THREE.Vector3 {

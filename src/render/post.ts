@@ -51,6 +51,38 @@ const FRAG = /* glsl */ `
     return m / 16.0 - 0.5;
   }
 
+  float lastExitLuma(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+  }
+
+  // Five taps are enough to bloom lamps and instrument glass at this resolution. Keeping
+  // it restrained preserves the low-fi silhouette instead of washing the night grey.
+  vec3 bloom(vec2 uv) {
+    vec2 px = 1.8 / uSourceRes;
+    vec3 sum = texture2D(tDiffuse, uv).rgb * 2.0;
+    sum += texture2D(tDiffuse, uv + vec2(px.x, 0.0)).rgb;
+    sum += texture2D(tDiffuse, uv - vec2(px.x, 0.0)).rgb;
+    sum += texture2D(tDiffuse, uv + vec2(0.0, px.y)).rgb;
+    sum += texture2D(tDiffuse, uv - vec2(0.0, px.y)).rgb;
+    sum += texture2D(tDiffuse, uv + px).rgb * 0.65;
+    sum += texture2D(tDiffuse, uv - px).rgb * 0.65;
+    sum += texture2D(tDiffuse, uv + vec2(px.x, -px.y)).rgb * 0.65;
+    sum += texture2D(tDiffuse, uv + vec2(-px.x, px.y)).rgb * 0.65;
+    sum *= 0.125;
+    return sum * smoothstep(0.20, 0.72, lastExitLuma(sum));
+  }
+
+  float windshieldDust(vec2 uv) {
+    // Sparse fixed flecks on the glass. Two scales avoid an obvious repeated noise field.
+    vec2 p = floor(uv * vec2(118.0, 67.0));
+    float seed = hash12(p + 71.3);
+    vec2 local = fract(uv * vec2(118.0, 67.0)) - 0.5;
+    float fleck = (1.0 - smoothstep(0.04, 0.17, length(local))) * step(0.982, seed);
+    vec2 p2 = floor(uv * vec2(43.0, 25.0));
+    float haze = step(0.972, hash12(p2 + 19.7)) * 0.22;
+    return fleck + haze;
+  }
+
   void main() {
     vec2 uv = vUv;
 
@@ -71,11 +103,36 @@ const FRAG = /* glsl */ `
     uv = clamp(uv, vec2(0.0005), vec2(0.9995));
 
     // --- chroma separation --------------------------------------------------
-    float ca = (0.0012 + uGlitch * 0.004) * uRetro;
+    float ca = (0.00065 + uGlitch * 0.004) * uRetro;
     vec3 col;
     col.r = texture2D(tDiffuse, uv + vec2(ca, 0.0)).r;
     col.g = texture2D(tDiffuse, uv).g;
     col.b = texture2D(tDiffuse, uv - vec2(ca, 0.0)).b;
+
+    // Optical spill around the moon, headlamps, signs and dashboard bulbs.
+    col += bloom(uv) * mix(0.12, 0.34, uRetro);
+
+    // Dust becomes visible only where bright scenery back-lights the windscreen.
+    float brightBehind = smoothstep(0.10, 0.62, lastExitLuma(col));
+    float dust = windshieldDust(uv) * brightBehind;
+    col += vec3(0.16, 0.135, 0.09) * dust * (0.20 + 0.24 * uRetro);
+
+    // A very restrained horizontal flare from the hottest lamps and reflective signs.
+    vec3 flareSample = texture2D(tDiffuse, vec2(uv.x + 0.025, uv.y)).rgb;
+    float flare = smoothstep(0.72, 1.15, lastExitLuma(flareSample));
+    col += vec3(0.18, 0.11, 0.055) * flare * 0.16;
+
+    // A restrained night grade: lift colour separation in the blacks while warm light
+    // remains warm. The S-curve keeps the horizon from turning into a flat blue band.
+    col = max(col, 0.0);
+    col = clamp(col, 0.0, 1.0);
+    vec3 graded = col * col * (3.0 - 2.0 * col);
+    // Keep some linear response so the dashboard and asphalt retain detail in the toe.
+    col = mix(col, graded, 0.68);
+    col += vec3(0.0025, 0.0035, 0.0060) * smoothstep(0.18, 0.0, lastExitLuma(col));
+    float luma = lastExitLuma(col);
+    col = mix(vec3(luma), col, 1.10);
+    col *= vec3(0.96, 1.0, 1.08);
 
     // --- colour damage ------------------------------------------------------
     vec2 pixel = uv * uSourceRes;
@@ -87,14 +144,17 @@ const FRAG = /* glsl */ `
 
     // luminance noise: film grain and tape hiss are the same gesture here
     float grain = hash12(pixel + fract(uTime) * 913.0) - 0.5;
-    col += grain * (0.035 + uGlitch * 0.09) * uRetro;
+    col += grain * (0.013 + uGlitch * 0.09) * uRetro;
 
     // --- the display itself -------------------------------------------------
-    float scan = 1.0 - 0.16 * uRetro * step(0.5, fract(pixel.y * 0.5));
+    float scan = 1.0 - 0.055 * uRetro * step(0.5, fract(pixel.y * 0.5));
     col *= scan;
 
-    float vig = 1.0 - r2 * 0.28 * uRetro;
+    float vig = 1.0 - smoothstep(0.28, 1.65, r2) * 0.34 * uRetro;
     col *= clamp(vig, 0.0, 1.0);
+
+    // Very faint glass reflection keeps the image from reading like a flat pixel canvas.
+    col += vec3(0.015, 0.019, 0.028) * pow(max(0.0, 1.0 - length(centred - vec2(-0.48, 0.42))), 5.0) * uRetro;
 
     col *= 1.0 - uFade;
 

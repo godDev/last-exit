@@ -19,7 +19,9 @@ const DEFAULTS: Settings = {
   dualSubtitles: true,
   masterVolume: 0.8,
   retro: 1,
-  renderHeight: 270,
+  // Still deliberately low-resolution, but with enough detail for the dashboard,
+  // road furniture and distant silhouettes to read on modern displays.
+  renderHeight: 480,
   showDebug: false,
 };
 
@@ -29,7 +31,10 @@ function load(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return { ...DEFAULTS };
-    return { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Settings>) };
+    const loaded = { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Settings>) };
+    // Migrate the old 270/360p prototype setting to the new detailed renderer.
+    loaded.renderHeight = Math.max(480, loaded.renderHeight);
+    return loaded;
   } catch {
     return { ...DEFAULTS };
   }

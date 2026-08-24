@@ -14,6 +14,7 @@ import { Road, ROAD_AHEAD, ROAD_BEHIND } from './world/road';
 import { PropField } from './world/props';
 import { Traffic } from './world/traffic';
 import { Sky } from './world/sky';
+import { DistantLandscape, HeadlightDust } from './world/atmosphere';
 import { FloatingOrigin } from './world/origin';
 import { Bus } from './bus/drive';
 import { Cabin, EYE_LOCAL, MIRROR_MOUNT } from './bus/interior';
@@ -55,6 +56,12 @@ scene.add(traffic.group);
 
 const sky = new Sky(seed);
 scene.add(sky.group);
+
+const landscape = new DistantLandscape(seed);
+scene.add(landscape.group);
+
+const dust = new HeadlightDust(seed);
+scene.add(dust.points);
 
 const bus = new Bus(path, seed, START_STATION);
 
@@ -110,6 +117,7 @@ const eye = new THREE.Vector3();
 const headL = new THREE.Vector3();
 const headR = new THREE.Vector3();
 const headDir = new THREE.Vector3();
+const collisionProbe = new THREE.Vector3();
 const headEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 const headQuat = new THREE.Quaternion();
 
@@ -303,12 +311,28 @@ const loop = new Loop((dt, elapsed) => {
   if (path.ensure(station, ROAD_BEHIND, ROAD_AHEAD)) road.rebuild();
   if (origin.update(bus.position)) road.rebuild();
   props.update(station);
+
+  // The coach body is approximated by a circle around its centre for roadside props.
+  // This is intentionally forgiving at the corners, where a first-person driver cannot
+  // judge centimetres, while still making posts, signs and vegetation physically real.
+  // Probe the front axle first (where an impact is perceived), then the body centre for
+  // broadside scrapes. This approximates the long coach as a two-circle capsule.
+  bus.localToWorld(0, 0.65, 5.25, collisionProbe);
+  const propHit = props.collisionAt(collisionProbe, 1.34) ?? props.collisionAt(bus.position, 1.38);
+  if (propHit && bus.impact(propHit.normal, propHit.penetration)) {
+    pulseGlitch(0.34);
+    engineAudio?.hiss(0.7, 0.28);
+    const warning = settings.lang === 'ru' ? 'СТОЛКНОВЕНИЕ' : 'IMPACT';
+    hud.say(null, warning, null, 1.15);
+  }
   traffic.update(dt, bus.distance);
 
   cabin.sync(bus.position, bus.heading, bus.pitch, bus.roll);
   placeCamera(dt);
   sky.update(camera, elapsed);
   sky.setDawn(Math.pow(clock.nightProgress, 2.5));
+  landscape.update(camera);
+  dust.update(bus, elapsed);
 
   // the saloon is lit by four tired domes, plus whatever passes the other way
   const glare = traffic.glareAt(bus.distance);
@@ -341,7 +365,7 @@ const loop = new Loop((dt, elapsed) => {
 
   shared.uHeadRange.value = bus.highBeam ? 165 : 105;
   shared.uHeadCone.value.set(bus.highBeam ? 0.992 : 0.985, bus.highBeam ? 0.9 : 0.8);
-  shared.uHeadIntensity.value = bus.highBeam ? 2.6 : 2.2;
+  shared.uHeadIntensity.value = bus.highBeam ? 3.2 : 2.75;
 
   // the mirror renders first and leaves the shader uniforms pointing at its own camera,
   // so the world rig has to be restored before the main pass
