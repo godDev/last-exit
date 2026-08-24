@@ -1,0 +1,167 @@
+import * as THREE from 'three';
+import type { Bus } from '../bus/drive';
+import type { Input } from './input';
+import type { Story } from './story';
+import type { StopSpec, StoryStops } from '../world/stops';
+import { settings } from './settings';
+import { subtitle } from '../content/i18n';
+
+export interface InteractionUi {
+  prompt(text: string | null): void;
+  say(who: string | null, primary: string, secondary: string | null, seconds?: number): void;
+}
+
+/**
+ * Entry/exit rules and a deliberately small on-foot controller. Every exterior scene is
+ * anchored to its bus: the player can inspect a compact area but can never strand the
+ * vehicle or walk far enough to bypass an authored beat.
+ */
+export class Interactions {
+  onFoot = false;
+  private readonly position = new THREE.Vector3();
+  private readonly direction = new THREE.Vector3();
+  private readonly up = new THREE.Vector3(0, 1, 0);
+  private lookYaw = 0;
+  private activeStop: StopSpec | null = null;
+
+  constructor(
+    private readonly stops: StoryStops,
+    private readonly story: Story,
+    private readonly ui: InteractionUi,
+    private readonly onExit: (stop: StopSpec) => void,
+    private readonly onEnter: (stop: StopSpec) => void,
+    private readonly onInspect: (id: string) => void,
+    private readonly onCheckpoint: () => void,
+  ) {}
+
+  update(dt: number, bus: Bus, input: Input): void {
+    if (!this.onFoot) {
+      const nearby = this.stops.nearest(bus.miles);
+      const stopped = bus.speedMph <= 1;
+      const available = nearby && !this.completed(nearby) ? nearby : null;
+      this.ui.prompt(available && stopped ? this.exitPrompt(available) : null);
+      if (available && stopped && input.wasTapped('interact')) this.exit(bus, available);
+      return;
+    }
+
+    const forward = this.direction.set(Math.sin(this.lookYaw), 0, Math.cos(this.lookYaw));
+    const right = new THREE.Vector3(forward.z, 0, -forward.x);
+    const move = new THREE.Vector3();
+    move.addScaledVector(forward, input.axis('brake', 'throttle'));
+    move.addScaledVector(right, input.axis('left', 'right'));
+    if (move.lengthSq() > 0) this.position.addScaledVector(move.normalize(), dt * 2.8);
+
+    // The zone is a circle centred on the door; it is a safety boundary, not an invisible maze.
+    const door = bus.localToWorld(2.05, 0, -4.7);
+    const delta = this.position.clone().sub(door).setY(0);
+    if (delta.length() > 13) this.position.copy(door).addScaledVector(delta.normalize(), 13);
+
+    const atDoor = this.position.distanceTo(door.setY(this.position.y)) < 2.1;
+    const inspect = this.stops.inspectableNear(this.position);
+    const missing = this.missingEvidence();
+    this.ui.prompt(
+      atDoor
+        ? missing.length > 0
+          ? (settings.lang === 'ru' ? 'СНАЧАЛА НАЙДИ УЛИКУ' : 'FIND THE CLUE FIRST')
+          : (settings.lang === 'ru' ? 'E  ВОЙТИ В АВТОБУС' : 'E  RETURN TO BUS')
+        : inspect
+          ? `${settings.lang === 'ru' ? 'E  ОСМОТРЕТЬ' : 'E  INSPECT'}  ·  ${inspect.title}`
+          : null,
+    );
+    if (!input.wasTapped('interact')) return;
+    if (atDoor && missing.length === 0) this.enter();
+    else if (atDoor) this.ui.say(null,
+      settings.lang === 'ru' ? 'СЦЕНА НЕ ЗАКОНЧЕНА.' : 'THE SCENE IS NOT FINISHED.',
+      settings.lang === 'ru' ? 'Осмотри нужные предметы, затем возвращайся в автобус.' : 'Inspect the important objects, then return to the bus.',
+      3,
+    );
+    else if (inspect) this.inspect(inspect.id);
+  }
+
+  placeCamera(camera: THREE.PerspectiveCamera, input: Input, dt: number): void {
+    const turn = input.axis('lookLeft', 'lookRight');
+    this.lookYaw -= turn * 1.65 * dt;
+    camera.position.copy(this.position);
+    this.direction.set(Math.sin(this.lookYaw), 0, Math.cos(this.lookYaw));
+    camera.up.copy(this.up);
+    camera.lookAt(this.position.clone().add(this.direction));
+    camera.updateMatrixWorld();
+  }
+
+  private exit(bus: Bus, stop: StopSpec): void {
+    // The interaction prompt deliberately has a forgiving approach radius. Once the
+    // driver commits to leaving the bus, park it at the authored turnout so the compact
+    // on-foot area is actually reachable rather than dozens of metres down the shoulder.
+    bus.restoreMiles(stop.mile);
+    this.onFoot = true;
+    this.activeStop = stop;
+    const door = bus.localToWorld(2.3, 0.05, -4.7);
+    this.position.copy(door).add(new THREE.Vector3(0, 1.68, 0));
+    this.lookYaw = bus.heading;
+    bus.speed = 0;
+    this.story.flag(`visited:${stop.id}`);
+    this.story.checkpoint({ kind: 'stop', stopId: stop.id });
+    this.onExit(stop);
+    // The patrol scene is a conversation at the driver's window, not a scavenger hunt.
+    // Stops with required evidence keep the player outside until the clue is found.
+    if (!stop.requiredEvidence?.length) {
+      this.enter();
+      return;
+    }
+    this.ui.say(null, stop.title,
+      settings.lang === 'ru'
+        ? 'Осмотри нужный предмет, затем вернись в автобус, чтобы решить, что делать дальше.'
+        : 'Inspect the important object, then return to the bus to decide what to do next.',
+      5,
+    );
+  }
+
+  private enter(): void {
+    const stop = this.activeStop;
+    this.onFoot = false;
+    this.activeStop = null;
+    this.story.checkpoint({ kind: 'driving' });
+    if (stop) this.onEnter(stop);
+    this.onCheckpoint();
+    this.ui.prompt(null);
+  }
+
+  private inspect(id: string): void {
+    this.story.evidence(id);
+    this.story.flag(`inspected:${id}`);
+    this.onInspect(id);
+    this.onCheckpoint();
+    const line = subtitle(`inspect.${id}`);
+    this.ui.say(null, line.primary, line.secondary, 4);
+  }
+
+  private exitPrompt(stop: StopSpec): string {
+    const labels: Partial<Record<StopSpec['id'], { en: string; ru: string }>> = {
+      mile86: { en: 'E  EXIT BUS AND LOOK AROUND', ru: 'E  ВЫЙТИ И ОСМОТРЕТЬСЯ' },
+      'closed-gas': { en: 'E  EXIT BUS AND LOOK AROUND', ru: 'E  ВЫЙТИ И ОСМОТРЕТЬСЯ' },
+      'highway-patrol': { en: 'E  SPEAK TO THE OFFICER', ru: 'E  ПОГОВОРИТЬ С ОФИЦЕРОМ' },
+      'final-stop': { en: 'E  EXIT BUS AND CHECK THE MARKER', ru: 'E  ВЫЙТИ И ПРОВЕРИТЬ УКАЗАТЕЛЬ' },
+    };
+    const action = labels[stop.id];
+    const label = action
+      ? settings.lang === 'ru' ? action.ru : action.en
+      : settings.lang === 'ru' ? 'E  ВЫЙТИ' : 'E  EXIT BUS';
+    return `${label}  ·  ${stop.title}`;
+  }
+
+  private missingEvidence(): string[] {
+    return (this.activeStop?.requiredEvidence ?? []).filter((id) => !this.story.has(`inspected:${id}`));
+  }
+
+  private completed(stop: StopSpec): boolean {
+    const flags: Record<StopSpec['id'], string> = {
+      mile86: 'choice:mile86',
+      'closed-gas': 'choice:stranded-man',
+      'millers-gas': 'miller.returned',
+      'highway-patrol': 'choice:patrol',
+      'sunset-motel': 'motel.roster-revealed',
+      'final-stop': 'choice:finale',
+    };
+    return this.story.has(flags[stop.id]);
+  }
+}

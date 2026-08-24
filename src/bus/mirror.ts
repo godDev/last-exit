@@ -31,6 +31,11 @@ const RT_HEIGHT = 96;
 const GLASS_WIDTH = 0.42;
 const GLASS_HEIGHT = GLASS_WIDTH * (RT_HEIGHT / RT_WIDTH);
 
+export interface MirrorOptions {
+  /** Exterior coach mirrors are tall and narrow; the saloon glass remains wide. */
+  side?: boolean;
+}
+
 export class Mirror {
   readonly mesh: THREE.Group;
   readonly camera: THREE.PerspectiveCamera;
@@ -42,19 +47,25 @@ export class Mirror {
   /** World position of the glass, for the "lean in and look" camera move. */
   readonly worldPosition = new THREE.Vector3();
 
-  constructor() {
-    this.target = new THREE.WebGLRenderTarget(RT_WIDTH, RT_HEIGHT, {
+  constructor(options: MirrorOptions = {}) {
+    const side = options.side ?? false;
+    const targetWidth = side ? 112 : RT_WIDTH;
+    const targetHeight = side ? 176 : RT_HEIGHT;
+    const glassWidth = side ? 0.24 : GLASS_WIDTH;
+    const glassHeight = side ? 0.42 : GLASS_HEIGHT;
+
+    this.target = new THREE.WebGLRenderTarget(targetWidth, targetHeight, {
       minFilter: THREE.NearestFilter,
       magFilter: THREE.NearestFilter,
       depthBuffer: true,
       colorSpace: THREE.LinearSRGBColorSpace,
     });
 
-    this.camera = new THREE.PerspectiveCamera(30, RT_WIDTH / RT_HEIGHT, 0.1, 1200);
+    this.camera = new THREE.PerspectiveCamera(side ? 38 : 30, targetWidth / targetHeight, 0.1, 1200);
     this.camera.layers.set(LAYER_WORLD);
     this.camera.layers.enable(LAYER_MIRROR_ONLY);
 
-    const geometry = new THREE.PlaneGeometry(GLASS_WIDTH, GLASS_HEIGHT);
+    const geometry = new THREE.PlaneGeometry(glassWidth, glassHeight);
     // a mirror swaps left and right; do it once, in the geometry
     const uv = geometry.attributes.uv as THREE.BufferAttribute;
     for (let i = 0; i < uv.count; i++) uv.setX(i, 1 - uv.getX(i));
@@ -71,7 +82,7 @@ export class Mirror {
     );
 
     const frame = new THREE.Mesh(
-      new THREE.BoxGeometry(GLASS_WIDTH + 0.06, GLASS_HEIGHT + 0.055, 0.04),
+      new THREE.BoxGeometry(glassWidth + (side ? 0.075 : 0.06), glassHeight + (side ? 0.07 : 0.055), side ? 0.065 : 0.04),
       createRetroMaterial({ color: 0x14100c, fogScale: 0, ambientBoost: 2.4, cabin: 1, snap: 0.25 }),
     );
     frame.position.z = -0.025;
@@ -124,6 +135,12 @@ export class Mirror {
     const material = this.glass.material as THREE.ShaderMaterial;
     material.uniforms.uColor.value.setRGB(1 - dirt * 0.25, 1 - dirt * 0.3, 1 - dirt * 0.38);
     material.uniforms.uEmissive.value = 1 - dirt * 0.15;
+  }
+
+  /** Exposure compensation for a small mirror render at night. */
+  setBrightness(multiplier: number): void {
+    const material = this.glass.material as THREE.ShaderMaterial;
+    material.uniforms.uEmissive.value = multiplier;
   }
 
   dispose(): void {

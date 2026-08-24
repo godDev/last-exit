@@ -7,28 +7,44 @@ import { Input } from './core/input';
 import { GameClock } from './core/clock';
 import { EventScheduler } from './core/events';
 import type { RouteState } from './core/events';
+import { Interactions } from './core/interactions';
+import { Story, type StoryChoiceScene, type StoryEnding, type StoryStopId } from './core/story';
+import { PassengerDirector } from './story/passengerDirector';
 import { SEED_ROUTE, mulberry32 } from './core/rng';
 import { settings, saveSettings } from './core/settings';
 import { RoutePath, STATION_SPACING } from './world/curvature';
+import { METRES_PER_MILE } from './core/units';
 import { Road, ROAD_AHEAD, ROAD_BEHIND } from './world/road';
 import { PropField } from './world/props';
 import { Traffic } from './world/traffic';
+import { StoryStops, STORY_MILES, STORY_STOPS } from './world/stops';
 import { Sky } from './world/sky';
 import { DistantLandscape, HeadlightDust } from './world/atmosphere';
 import { FloatingOrigin } from './world/origin';
 import { Bus } from './bus/drive';
-import { Cabin, EYE_LOCAL, MIRROR_MOUNT } from './bus/interior';
+import { Cabin, EYE_LOCAL, LEFT_MIRROR_MOUNT, MIRROR_MOUNT } from './bus/interior';
 import { Roster } from './bus/passengers';
 import { LAYER_DIRECT_ONLY, setCabinGlow } from './bus/mirror';
 import { AudioSystem } from './audio/context';
 import { EngineAudio } from './audio/engine';
 import { Radio } from './audio/radio';
 import { Hud } from './ui/hud';
+import { Journal } from './ui/journal';
+import { Choices } from './ui/choices';
+import { EndingScreen } from './ui/ending';
 import { DebugPanel } from './ui/debug';
 import { t, subtitle } from './content/i18n';
+import { PASSENGERS } from './content/passengers';
 
 /** Everything reachable from the console while tuning. Filled in as systems come up. */
 const dev: Record<string, unknown> = {};
+let savedShift = Story.load();
+// Builds before the compressed pacing stored route positions such as Mile 86. They cannot
+// be mapped faithfully into the short playable route, so begin a clean shift instead.
+if (savedShift && savedShift.mile > STORY_MILES.carson + 0.5) {
+  Story.clearSave();
+  savedShift = null;
+}
 
 // --- plumbing ----------------------------------------------------------------
 const canvas = document.getElementById('view') as HTMLCanvasElement;
@@ -51,6 +67,9 @@ scene.add(road.mesh);
 const props = new PropField(path, seed, START_STATION * STATION_SPACING);
 scene.add(props.group);
 
+const storyStops = new StoryStops(path, START_STATION * STATION_SPACING);
+scene.add(storyStops.group);
+
 const traffic = new Traffic(path, mulberry32(seed ^ 0x7a11));
 scene.add(traffic.group);
 
@@ -65,26 +84,287 @@ scene.add(dust.points);
 
 const bus = new Bus(path, seed, START_STATION);
 
+if (savedShift) {
+  const resumeStation = START_STATION + Math.floor(savedShift.mile * METRES_PER_MILE / STATION_SPACING);
+  path.ensure(resumeStation, ROAD_BEHIND, ROAD_AHEAD);
+  bus.restoreMiles(savedShift.mile);
+  road.rebuild();
+  props.update(resumeStation, true);
+}
+
 const cabin = new Cabin();
 scene.add(cabin.group);
 
+const story = new Story(savedShift?.story);
 const roster = new Roster(cabin.passengerRoot);
-// Three fares out of Las Palmas. The other nine are the game's problem, not the prototype's.
-roster.board({ id: 'coat', row: 1, side: -1 });
-roster.board({ id: 'sleeper', row: 3, side: 1 });
-roster.board({ id: 'hat', row: 6, side: -1 });
+const passengerDirector = new PassengerDirector(roster, story);
+passengerDirector.restore();
 
 const origin = new FloatingOrigin(4000);
-origin.add(path, bus, props);
+origin.add(path, bus, props, storyStops);
 
-const input = new Input();
+const input = new Input(window, import.meta.env.DEV);
 const clock = new GameClock();
+if (savedShift) clock.minutes = savedShift.minutes;
 const hud = new Hud();
 const debug = new DebugPanel();
+const journal = new Journal();
+const choices = new Choices();
+let discardSaveOnUnload = false;
+function restartShift(): void {
+  discardSaveOnUnload = true;
+  Story.clearSave();
+  window.location.reload();
+}
+const endingScreen = new EndingScreen(restartShift);
+
+type ChoiceScene = StoryChoiceScene;
+let activeChoice: ChoiceScene | null = null;
+let heldByPatrol = false;
+let heldAtStoryStop = false;
+let paused = false;
+let autosaveElapsed = 0;
+let scriptedStop: StoryStopId | null = null;
+
+function persistShift(): void {
+  story.autosave(bus.miles, clock.minutes);
+}
+
+function stopMile(stopId: StoryStopId): number {
+  const stop = STORY_STOPS.find((candidate) => candidate.id === stopId);
+  return stop?.mile ?? 0;
+}
+
+function parkAtStoryStop(stopId: StoryStopId): void {
+  const mile = stopMile(stopId);
+  const station = START_STATION + Math.floor(mile * METRES_PER_MILE / STATION_SPACING);
+  path.ensure(station, ROAD_BEHIND, ROAD_AHEAD);
+  bus.restoreMiles(mile);
+  road.rebuild();
+  props.update(station, true);
+  storyStops.update(mile);
+  heldByPatrol = stopId === 'highway-patrol';
+  heldAtStoryStop = !heldByPatrol;
+}
+
+/**
+ * A story beat should feel like the driver is pulling into a turnout, not like the world
+ * skipped a few hundred metres. This briefly borrows lane-following and eases the coach
+ * down to walking speed before the exact parking correction.
+ */
+function beginScriptedStop(stopId: StoryStopId): void {
+  scriptedStop = stopId;
+  story.checkpoint({ kind: 'stop', stopId });
+}
+
+function updateScriptedStop(dt: number): void {
+  if (!scriptedStop) return;
+  const stopId = scriptedStop;
+  const remaining = (stopMile(stopId) - bus.miles) * METRES_PER_MILE;
+  if (remaining <= 1.5 || (remaining < 5 && bus.speed < 3.2)) {
+    scriptedStop = null;
+    parkAtStoryStop(stopId);
+    engineAudio?.hiss(0.55, 0.14);
+    if (stopId === 'mile86') openChoice('mile86', 'mile86');
+    return;
+  }
+
+  // 1.25 m/s² leaves a comfortable margin for the coach's engine braking. The small
+  // offset makes it settle at the turnout rather than hover at a crawl far before it.
+  const targetSpeed = Math.min(23, Math.max(0, Math.sqrt(Math.max(0, 2.5 * (remaining - 7))) - 1.5));
+  const wasAutopilot = bus.autopilot;
+  const wasAutopilotSpeed = bus.autopilotSpeed;
+  bus.autopilot = true;
+  bus.autopilotSpeed = targetSpeed;
+  bus.update(dt, input);
+  bus.autopilot = wasAutopilot;
+  bus.autopilotSpeed = wasAutopilotSpeed;
+}
+
+function choiceSceneForStop(stopId: StoryStopId): ChoiceScene | null {
+  const scenes: Partial<Record<StoryStopId, ChoiceScene>> = {
+    mile86: 'mile86',
+    'closed-gas': 'stranded-man',
+    'highway-patrol': 'patrol',
+    'final-stop': 'finale',
+  };
+  return scenes[stopId] ?? null;
+}
+
+const interactions = new Interactions(storyStops, story, hud, (stop) => {
+  heldAtStoryStop = false;
+  const acts = {
+    'mile86': 'mile86',
+    'closed-gas': 'gas',
+    'millers-gas': 'gas',
+    'highway-patrol': 'patrol',
+    'sunset-motel': 'motel',
+    'final-stop': 'finale',
+  } as const;
+  story.setAct(acts[stop.id]);
+  persistShift();
+}, (stop) => {
+  if (stop.id === 'millers-gas' && story.has('inspected:millers.receipt') && !story.has('miller.returned')) {
+    const nora = roster.find('nora-vale');
+    const noraWasMirror = nora?.where === 'mirror';
+    if (!nora) passengerDirector.board('nora-vale');
+    passengerDirector.setAppearance('nora-vale', { presence: 'both' });
+    // Ray was sitting beside the player a moment ago; now he only exists in the glass.
+    passengerDirector.mirrorOnly('ray-hollis', 1.4);
+    story.evidence('miller.nora-boarded');
+    story.flag('miller.returned');
+    hud.say(null,
+      !nora || noraWasMirror
+        ? (settings.lang === 'ru' ? 'В САЛОНЕ КТО-ТО СИДИТ.' : 'SOMEONE IS SITTING IN THE SALOON.')
+        : (settings.lang === 'ru' ? 'НОРА СМОТРИТ НА КАССУ.' : 'NORA IS WATCHING THE FARE BOX.'),
+      null,
+      4,
+    );
+  }
+  if (stop.id === 'sunset-motel' && story.has('inspected:sunset.manifest') && !story.has('motel.roster-revealed')) {
+    for (const profile of PASSENGERS) {
+      if (profile.boarded === 1986) passengerDirector.board(profile.id);
+    }
+    story.flag('motel.roster-revealed');
+    hud.say(null, settings.lang === 'ru' ? 'ВСЕ МЕСТА ЗАНЯТЫ.' : 'EVERY SEAT IS TAKEN.', settings.lang === 'ru' ? 'Ты не слышал, как они вошли.' : 'You did not hear them board.', 4);
+  }
+  const choiceScene = choiceSceneForStop(stop.id);
+  if (choiceScene) openChoice(choiceScene, stop.id);
+}, persistShift, persistShift);
+
+function openChoice(choiceScene: ChoiceScene, stopId: StoryStopId): void {
+  if (choices.active || story.has(`choice:${choiceScene}`)) return;
+  activeChoice = choiceScene;
+  story.checkpoint({ kind: 'choice', stopId, scene: choiceScene });
+  if (choiceScene === 'mile86') {
+    story.evidence('mile86.timetable');
+    choices.show(t('choice.mile86.title'), [
+      { id: 'board', text: t('choice.mile86.board') },
+      { id: 'pass', text: t('choice.mile86.pass') },
+      { id: 'radio', text: t('choice.mile86.radio') },
+    ]);
+  } else if (choiceScene === 'stranded-man') {
+    choices.show(t('choice.roadside.title'), [
+      { id: 'board', text: t('choice.roadside.board') },
+      { id: 'leave', text: t('choice.roadside.leave') },
+      { id: 'radio', text: t('choice.roadside.radio') },
+    ]);
+  } else if (choiceScene === 'patrol') {
+    choices.show(t('choice.patrol.title'), [
+      { id: 'documents', text: t('choice.patrol.documents') },
+      { id: 'question', text: t('choice.patrol.question') },
+      { id: 'silent', text: t('choice.patrol.silent') },
+    ]);
+  } else {
+    choices.show(t('choice.finale.title'), [
+      ...PASSENGERS.map((profile) => ({ id: profile.id, text: profile.name })),
+      { id: 'refuse', text: t('choice.finale.refuse') },
+    ]);
+  }
+  persistShift();
+}
+
+function showEnding(ending: StoryEnding): void {
+  bus.speed = 0;
+  paused = true;
+  journal.close();
+  hud.clear();
+  endingScreen.show(ending);
+}
+
+function finishEnding(ending: StoryEnding, picked?: string): void {
+  if (story.has('ending:arrival') || story.has('ending:route-continues') || story.has('ending:no-final-stop')) {
+    showEnding(ending);
+    return;
+  }
+  if (ending === 'route-continues' && picked) passengerDirector.mirrorOnly(picked, 1.6);
+  if (ending === 'no-final-stop') {
+    for (const profile of PASSENGERS) passengerDirector.mirrorOnly(profile.id, 1.15);
+  }
+  story.flag(`ending:${ending}`);
+  story.setAct('finale');
+  story.checkpoint({ kind: 'ending', ending });
+  persistShift();
+  showEnding(ending);
+}
+
+function applyChoice(scene: ChoiceScene, picked: string): void {
+  story.choose(scene, picked);
+  story.setAct(scene === 'mile86' ? 'mile86' : scene === 'stranded-man' ? 'gas' : scene === 'patrol' ? 'patrol' : 'finale');
+
+  if (scene === 'mile86') {
+    if (picked === 'board') {
+      passengerDirector.board('nora-vale');
+      story.evidence('mile86.nora-boarded');
+      hud.say(null, 'NORA VALE', settings.lang === 'ru' ? 'Она занимает последнее место и не называет имени.' : 'She takes the last seat without giving her name.', 4);
+    } else if (picked === 'radio') {
+      dispatch('dispatch.mile86.radio');
+      story.evidence('mile86.dispatch-denial');
+      story.flag('nora.deferred');
+    } else {
+      hud.say(null, 'MILE 86', settings.lang === 'ru' ? 'Девушка остаётся в зеркале ещё долго после остановки.' : 'The girl stays in the mirror long after the stop has gone.', 4);
+      passengerDirector.board('nora-vale');
+      passengerDirector.mirrorOnly('nora-vale');
+      story.evidence('mile86.nora-mirror');
+    }
+  } else if (scene === 'stranded-man') {
+    if (picked === 'board') {
+      passengerDirector.board('frank-morrow');
+      story.evidence('closed-gas.frank-boarded');
+      hud.say(null, 'STRANDED MAN', settings.lang === 'ru' ? 'Он садится в конце салона и не смотрит в окно.' : 'He sits at the back and does not look out the window.', 4);
+    } else if (picked === 'radio') {
+      dispatch('dispatch.roadside');
+      story.evidence('closed-gas.assistance');
+    } else {
+      story.evidence('closed-gas.left-behind');
+      hud.say(null, 'SHOULDER', settings.lang === 'ru' ? 'Седан исчезает в тумане позади.' : 'The sedan disappears into the fog behind you.', 4);
+    }
+  } else if (scene === 'patrol') {
+    story.evidence('patrol.bus17');
+    const line = picked === 'documents'
+      ? settings.lang === 'ru' ? 'Сэр… где вы взяли этот автобус?' : 'Sir… where did you get this bus?'
+      : picked === 'question'
+        ? settings.lang === 'ru' ? 'Офицер смотрит на номер семнадцать, затем отводит взгляд от окон.' : 'The officer looks at the number seventeen, then away from the windows.'
+        : settings.lang === 'ru' ? 'Офицер ждёт. Он ни разу не смотрит в салон.' : 'The officer waits. He never looks into the saloon.';
+    hud.say(settings.lang === 'ru' ? 'ДОРОЖНАЯ ПОЛИЦИЯ' : 'HIGHWAY PATROL', line, null, 5);
+  } else {
+    const ending = picked === 'nora-vale' ? 'arrival' : picked === 'refuse' ? 'no-final-stop' : 'route-continues';
+    story.choose('final-passenger', picked);
+    if (ending === 'no-final-stop') {
+      finishEnding(ending, picked);
+    } else {
+      // The last decision is not a menu-shaped cut to credits. The player gets to feel
+      // the final thirty miles and see the consequence in the cabin before Carson.
+      story.flag(`pending:${ending}`);
+      if (ending === 'arrival') passengerDirector.setAppearance('nora-vale', { presence: 'nowhere' });
+      else passengerDirector.mirrorOnly(picked, 1.6);
+      hud.say(null,
+        ending === 'arrival'
+          ? (settings.lang === 'ru' ? 'НОРА ВЫШЛА.' : 'NORA HAS LEFT THE BUS.')
+          : (settings.lang === 'ru' ? 'ПАССАЖИР ОСТАЛСЯ В ЗЕРКАЛЕ.' : 'THE PASSENGER REMAINS IN THE MIRROR.'),
+        settings.lang === 'ru' ? 'До Карсона ещё тридцать миль.' : 'Thirty miles remain to Carson.',
+        5,
+      );
+    }
+  }
+  if (scene === 'patrol') heldByPatrol = false;
+  heldAtStoryStop = false;
+  if (!endingScreen.visible) story.checkpoint({ kind: 'driving' });
+  persistShift();
+}
+
+function resolveChoice(): void {
+  const picked = choices.resolve(input);
+  if (!picked || !activeChoice) return;
+  const scene = activeChoice;
+  activeChoice = null;
+  applyChoice(scene, picked);
+}
 
 // --- head --------------------------------------------------------------------
 let lookX = 0;
 let glance = 0;          // 0 = eyes on the road, 1 = looking into the mirror
+let leftMirrorGlance = 0;
 const REST_FOV = 58;
 const MIRROR_FOV = 38;
 
@@ -95,6 +375,15 @@ const MIRROR_FOV = 38;
  */
 const mirrorLook = (() => {
   const d = MIRROR_MOUNT.clone().sub(EYE_LOCAL).normalize();
+  return {
+    pitch: Math.asin(THREE.MathUtils.clamp(d.y, -1, 1)),
+    yaw: Math.atan2(-d.x, -d.z),
+  };
+})();
+
+/** The side glass is outside the driver's peripheral view, so a generic 45° look is not enough. */
+const leftMirrorLook = (() => {
+  const d = LEFT_MIRROR_MOUNT.clone().sub(EYE_LOCAL).normalize();
   return {
     pitch: Math.asin(THREE.MathUtils.clamp(d.y, -1, 1)),
     yaw: Math.atan2(-d.x, -d.z),
@@ -122,6 +411,10 @@ const headEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 const headQuat = new THREE.Quaternion();
 
 function placeCamera(dt: number): void {
+  if (interactions.onFoot) {
+    interactions.placeCamera(camera, input, dt);
+    return;
+  }
   if (inspect >= 0) {
     const view = INSPECT_VIEWS[inspect];
     camera.position.copy(view.from);
@@ -138,8 +431,11 @@ function placeCamera(dt: number): void {
     return;
   }
 
-  const wanted = input.axis('lookLeft', 'lookRight');
+  const wanted = input.isDown('lookRight') ? 1 : 0;
   lookX += (wanted - lookX) * Math.min(1, dt * 7);
+
+  const wantLeftMirror = input.isDown('lookLeft') ? 1 : 0;
+  leftMirrorGlance += (wantLeftMirror - leftMirrorGlance) * Math.min(1, dt * 9);
 
   const wantGlance = input.isDown('lookMirror') ? 1 : 0;
   glance += (wantGlance - glance) * Math.min(1, dt * 9);
@@ -147,13 +443,15 @@ function placeCamera(dt: number): void {
   camera.position.copy(cabin.eye(eye, bus.heave));
 
   // a glance to the right is a negative yaw, because +Y rotation turns the view left
-  const yaw = THREE.MathUtils.lerp(-lookX * 0.85, mirrorLook.yaw, glance);
-  const pitch = THREE.MathUtils.lerp(0, mirrorLook.pitch, glance);
+  const freeYaw = THREE.MathUtils.lerp(-lookX * 0.85, leftMirrorLook.yaw, leftMirrorGlance);
+  const freePitch = THREE.MathUtils.lerp(0, leftMirrorLook.pitch, leftMirrorGlance);
+  const yaw = THREE.MathUtils.lerp(freeYaw, mirrorLook.yaw, glance);
+  const pitch = THREE.MathUtils.lerp(freePitch, mirrorLook.pitch, glance);
   headEuler.set(pitch, yaw, 0, 'YXZ');
   headQuat.setFromEuler(headEuler);
   camera.quaternion.copy(cabin.group.quaternion).multiply(headQuat);
 
-  const fov = THREE.MathUtils.lerp(REST_FOV, MIRROR_FOV, glance);
+  const fov = THREE.MathUtils.lerp(REST_FOV, MIRROR_FOV, Math.max(glance, leftMirrorGlance));
   if (Math.abs(camera.fov - fov) > 0.01) {
     camera.fov = fov;
     camera.updateProjectionMatrix();
@@ -164,11 +462,13 @@ function placeCamera(dt: number): void {
 
 // --- boot --------------------------------------------------------------------
 const boot = document.getElementById('boot')!;
-const bootNote = boot.querySelector('[data-i18n="boot.note"]') as HTMLElement;
 let started = false;
 
 function refreshBootText(): void {
-  bootNote.textContent = t('boot.note');
+  boot.querySelectorAll<HTMLElement>('[data-i18n]').forEach((element) => {
+    const key = element.dataset.i18n;
+    if (key) element.textContent = t(key);
+  });
   boot.querySelectorAll<HTMLElement>('.lang-btn').forEach((b) => {
     b.classList.toggle('active', b.dataset.lang === settings.lang);
   });
@@ -197,6 +497,16 @@ function dispatch(key: string): void {
   hud.say(t('who.dispatch'), line.primary, line.secondary, seconds);
 }
 
+function storyRadio(key: string): void {
+  // Important information has a physical fallback elsewhere. These broadcasts are rewards
+  // for tuning in, never subtitles from a radio the player has turned off.
+  if (!radio?.isTuned('kzqa')) return;
+  const line = subtitle(key);
+  let seconds = 5;
+  if (audio) seconds = radio.voice.speak(t(key), 'anchor', audio.radio, 0.9) + 1;
+  hud.say(t('who.radio'), line.primary, line.secondary, seconds);
+}
+
 async function startShift(): Promise<void> {
   if (started) return;
   started = true;
@@ -215,7 +525,12 @@ async function startShift(): Promise<void> {
     // audio is a luxury; the road is not
   }
 
+  hydrateCheckpoint();
+  if (endingScreen.visible) return;
+
   dispatch('dispatch.checkin');
+  const intro = subtitle('intro.objective');
+  hud.queue(null, intro.primary, intro.secondary, 5);
 }
 
 document.getElementById('boot-start')!.addEventListener('click', () => { void startShift(); });
@@ -226,6 +541,10 @@ input.on('toggleLang', () => {
   settings.lang = settings.lang === 'en' ? 'ru' : 'en';
   saveSettings();
   refreshBootText();
+  journal.refresh(story);
+});
+input.on('toggleJournal', () => {
+  if (!endingScreen.visible) journal.toggle(story);
 });
 input.on('highBeam', () => { bus.highBeam = !bus.highBeam; });
 input.on('autopilot', () => { bus.autopilot = !bus.autopilot; });
@@ -239,6 +558,25 @@ input.on('inspect', () => {
 input.on('radioPower', () => { radio?.togglePower(); });
 input.on('radioSeek', () => { radio?.seek(); });
 input.on('horn', () => { engineAudio?.hiss(0.45, 0.18); });
+
+/** Testing travel keeps long-route content practical to tune without simulating eighty real miles. */
+function jumpToStoryMile(mile: number): void {
+  const station = START_STATION + Math.floor(mile * METRES_PER_MILE / STATION_SPACING);
+  path.ensure(station, ROAD_BEHIND, ROAD_AHEAD);
+  bus.restoreMiles(mile);
+  road.rebuild();
+  props.update(station, true);
+  storyStops.update(mile);
+  hud.say(null, 'ROUTE 17', `Mile ${Math.round(mile)} — testing jump`, 2);
+}
+input.on('jumpMile86', () => jumpToStoryMile(STORY_MILES.mile86 - 0.5));
+input.on('jumpRoadside', () => jumpToStoryMile(STORY_MILES.closedGas - 0.5));
+input.on('jumpMillers', () => jumpToStoryMile(STORY_MILES.millersGas - 0.5));
+input.on('jumpMotel', () => jumpToStoryMile(STORY_MILES.sunsetMotel - 0.5));
+input.on('jumpFinale', () => jumpToStoryMile(STORY_MILES.finalStop - 0.5));
+input.on('resetShift', () => {
+  restartShift();
+});
 
 /**
  * The demonstration this milestone exists for. G steps through what the layer split makes
@@ -266,29 +604,172 @@ function pulseGlitch(amount: number): void {
 
 // --- triggers ----------------------------------------------------------------
 /**
- * Two smoke-test triggers, to prove the scheduler fires off mile and time the way the
- * script will need it to. The acts themselves are not this milestone's business.
+ * Route acts are data-driven: each fires once and leaves a persistent choice/evidence state.
  */
-const events = new EventScheduler({ dispatch, pulseGlitch });
+const events = new EventScheduler({
+  dispatch,
+  pulseGlitch,
+  openChoice,
+  storyRadio,
+  say: (key: string) => {
+    const line = subtitle(key);
+    hud.say(null, line.primary, line.secondary, 5);
+  },
+  queue: (key: string) => {
+    const line = subtitle(key);
+    hud.queue(null, line.primary, line.secondary, 5);
+  },
+  stopAt: (mile: number) => {
+    const stop = STORY_STOPS.find((candidate) => Math.abs(candidate.mile - mile) < 0.001);
+    if (!stop) return;
+    beginScriptedStop(stop.id);
+  },
+  stopForPatrol: () => {
+    beginScriptedStop('highway-patrol');
+  },
+}, (id) => {
+  story.markEvent(id);
+  persistShift();
+});
 events.add(
   {
-    id: 'smoke.mile86',
-    when: (s) => s.mile > 0.8,
-    run: (c) => c.dispatch('dispatch.mile86'),
+    id: 'intro.mirror',
+    when: (s) => s.mile > 0.25,
+    run: (c) => c.say('intro.mirror'),
   },
   {
-    id: 'smoke.repeat',
-    when: (s) => s.mile > 2.2 && s.speedMph > 30,
+    id: 'mile86.warning',
+    when: (s) => s.mile > STORY_MILES.mile86 - 0.94 && !s.flags.has('choice:mile86'),
     run: (c) => {
-      c.dispatch('dispatch.repeat');
-      c.pulseGlitch(0.5);
+      c.dispatch('dispatch.mile86');
+      const line = subtitle('scene.mile86.approach');
+      hud.queue(null, line.primary, line.secondary, 4);
     },
   },
+  {
+    id: 'mile86.arrive',
+    when: (s) => s.mile > STORY_MILES.mile86 - 0.18 && !s.flags.has('choice:mile86'),
+    run: (c) => c.stopAt(STORY_MILES.mile86),
+  },
+  {
+    id: 'roadside.warning',
+    when: (s) => s.mile > STORY_MILES.closedGas - 0.94 && !s.flags.has('choice:stranded-man'),
+    run: (c) => {
+      c.dispatch('dispatch.roadside');
+      c.queue('scene.roadside.approach');
+    },
+  },
+  {
+    id: 'roadside.arrive',
+    when: (s) => s.mile > STORY_MILES.closedGas - 0.18 && !s.flags.has('choice:stranded-man'),
+    run: (c) => c.stopAt(STORY_MILES.closedGas),
+  },
+  {
+    id: 'roadside.man.disappears',
+    when: (s) => s.flags.has('choice:stranded-man') && s.mile > STORY_MILES.closedGas + 0.75 && !s.flags.has('man.disappeared'),
+    run: () => {
+      if (story.state.choices['stranded-man'] !== 'board') return;
+      passengerDirector.mirrorOnly('frank-morrow', 1.5);
+      story.flag('man.disappeared');
+      story.evidence('man.mirror');
+      pulseGlitch(0.55);
+    },
+  },
+  {
+    id: 'millers.approach',
+    when: (s) => s.mile > STORY_MILES.millersGas - 0.92 && !s.flags.has('miller.returned'),
+    run: (c) => c.say('scene.millers.approach'),
+  },
+  {
+    id: 'millers.arrive',
+    when: (s) => s.mile > STORY_MILES.millersGas - 0.18 && !s.flags.has('miller.returned'),
+    run: (c) => c.stopAt(STORY_MILES.millersGas),
+  },
+  {
+    id: 'patrol.stop',
+    when: (s) => s.mile > STORY_MILES.highwayPatrol - 0.1 && !s.flags.has('choice:patrol'),
+    run: (c) => { c.stopForPatrol(); c.dispatch('dispatch.patrol'); },
+  },
+  {
+    id: 'motel.approach',
+    when: (s) => s.mile > STORY_MILES.sunsetMotel - 0.92 && !s.flags.has('motel.roster-revealed'),
+    run: (c) => c.say('scene.motel.approach'),
+  },
+  {
+    id: 'motel.arrive',
+    when: (s) => s.mile > STORY_MILES.sunsetMotel - 0.18 && !s.flags.has('motel.roster-revealed'),
+    run: (c) => c.stopAt(STORY_MILES.sunsetMotel),
+  },
+  {
+    id: 'radio.missing-bus',
+    when: (s) => s.mile > STORY_MILES.highwayPatrol + 0.45 && Boolean(radio?.isTuned('kzqa')),
+    run: (c) => c.storyRadio('radio.story.missing'),
+  },
+  {
+    id: 'radio.final-warning',
+    when: (s) => s.mile > STORY_MILES.finalStop - 1 && Boolean(radio?.isTuned('kzqa')),
+    run: (c) => c.storyRadio('radio.story.count'),
+  },
+  {
+    id: 'final.roster',
+    when: (s) => s.mile > STORY_MILES.finalStop - 0.6 && !s.flags.has('final.roster-ready'),
+    run: () => {
+      for (const profile of PASSENGERS) {
+        passengerDirector.board(profile.id);
+        passengerDirector.setAppearance(profile.id, { presence: 'both' });
+      }
+      story.flag('final.roster-ready');
+      hud.say(null, settings.lang === 'ru' ? 'САЛОН ПОЛОН.' : 'THE SALOON IS FULL.', settings.lang === 'ru' ? 'Ты не видел, как занялись пустые места.' : 'You did not see the empty seats fill.', 4);
+    },
+  },
+  {
+    id: 'final.approach',
+    when: (s) => s.mile > STORY_MILES.finalStop - 0.25 && !s.flags.has('choice:final-passenger'),
+    run: (c) => c.say('scene.finale.approach'),
+  },
+  {
+    id: 'finale.arrive',
+    when: (s) => s.mile > STORY_MILES.finalStop - 0.18 && !s.flags.has('choice:final-passenger'),
+    run: (c) => c.stopAt(STORY_MILES.finalStop),
+  },
+  {
+    id: 'finale.arrival',
+    when: (s) => s.mile >= STORY_MILES.carson && (s.flags.has('pending:arrival') || s.flags.has('pending:route-continues')),
+    run: () => finishEnding(story.has('pending:arrival') ? 'arrival' : 'route-continues', story.state.choices['final-passenger']),
+  },
 );
+events.restore(story.state.firedEvents);
+
+function hydrateCheckpoint(): void {
+  const checkpoint = story.state.checkpoint;
+  if (checkpoint.kind === 'driving') return;
+  if (checkpoint.kind === 'ending') {
+    showEnding(checkpoint.ending);
+    return;
+  }
+  parkAtStoryStop(checkpoint.stopId);
+  if (checkpoint.kind === 'choice') openChoice(checkpoint.scene, checkpoint.stopId);
+  else if (checkpoint.stopId === 'mile86' && !story.has('choice:mile86')) openChoice('mile86', 'mile86');
+}
+
+function recoverInterruptedScene(): void {
+  if (!story.recoverInterruptedScene()) return;
+  const checkpoint = story.state.checkpoint;
+  if (checkpoint.kind === 'stop' || checkpoint.kind === 'choice') {
+    parkAtStoryStop(checkpoint.stopId);
+    if (checkpoint.kind === 'choice') openChoice(checkpoint.scene, checkpoint.stopId);
+    else if (checkpoint.stopId === 'mile86' && !story.has('choice:mile86')) openChoice('mile86', 'mile86');
+  }
+  persistShift();
+}
 
 const routeState: RouteState = { mile: 0, minutes: 0, speedMph: 0, flags: new Set<string>() };
-let paused = false;
 input.on('pause', () => {
+  if (endingScreen.visible || choices.active) return;
+  if (journal.visible) {
+    journal.close();
+    return;
+  }
   paused = !paused;
   if (paused) hud.say(null, settings.lang === 'ru' ? 'ПАУЗА' : 'PAUSED', null, 9999);
   else hud.clear();
@@ -297,13 +778,29 @@ input.on('pause', () => {
 // --- frame -------------------------------------------------------------------
 const loop = new Loop((dt, elapsed) => {
   if (started && !paused) {
-    bus.update(dt, input);
-    clock.advance(dt);
+    recoverInterruptedScene();
+    // A player cannot be asked to make a careful narrative decision while the coach
+    // quietly rolls past it. Journal and choice screens hold this single-player moment.
+    const narrativeLocked = choices.active || journal.visible;
+    if (scriptedStop) updateScriptedStop(dt);
+    else if (!interactions.onFoot && !heldByPatrol && !heldAtStoryStop && !narrativeLocked) bus.update(dt, input);
+    clock.syncRoute(bus.miles);
 
     routeState.mile = bus.miles;
     routeState.minutes = clock.minutes;
     routeState.speedMph = bus.speedMph;
-    events.update(routeState);
+    routeState.flags.clear();
+    story.state.flags.forEach((flag) => routeState.flags.add(flag));
+    if (!journal.visible) events.update(routeState);
+    if (!journal.visible) resolveChoice();
+
+    if (story.state.checkpoint.kind === 'driving') {
+      autosaveElapsed += dt;
+      if (autosaveElapsed >= 20) {
+        autosaveElapsed = 0;
+        persistShift();
+      }
+    }
   }
 
   // keep the ribbon centred on the bus, and pull the world back when it drifts
@@ -311,6 +808,7 @@ const loop = new Loop((dt, elapsed) => {
   if (path.ensure(station, ROAD_BEHIND, ROAD_AHEAD)) road.rebuild();
   if (origin.update(bus.position)) road.rebuild();
   props.update(station);
+  storyStops.update(bus.miles);
 
   // The coach body is approximated by a circle around its centre for roadside props.
   // This is intentionally forgiving at the corners, where a first-person driver cannot
@@ -318,16 +816,28 @@ const loop = new Loop((dt, elapsed) => {
   // Probe the front axle first (where an impact is perceived), then the body centre for
   // broadside scrapes. This approximates the long coach as a two-circle capsule.
   bus.localToWorld(0, 0.65, 5.25, collisionProbe);
-  const propHit = props.collisionAt(collisionProbe, 1.34) ?? props.collisionAt(bus.position, 1.38);
-  if (propHit && bus.impact(propHit.normal, propHit.penetration)) {
+  // Holding S at walking speed is an intentional "get me out" action: a cactus or post
+  // cannot repeatedly bounce the coach and prevent a reverse manoeuvre.
+  const reversingOut = input.isDown('brake') && bus.speed <= 0.3;
+  const propHit = interactions.onFoot || reversingOut
+    ? null
+    : props.collisionAt(collisionProbe, 1.34) ?? props.collisionAt(bus.position, 1.38);
+  const yielded = propHit ? props.knockDown(propHit, bus.forwardVector) : false;
+  if (yielded) {
+    pulseGlitch(0.34);
+    engineAudio?.hiss(0.32, 0.12);
+  } else if (propHit && bus.impact(propHit.normal, propHit.penetration)) {
     pulseGlitch(0.34);
     engineAudio?.hiss(0.7, 0.28);
-    const warning = settings.lang === 'ru' ? 'СТОЛКНОВЕНИЕ' : 'IMPACT';
-    hud.say(null, warning, null, 1.15);
+    hud.say(null, settings.lang === 'ru' ? 'СТОЛКНОВЕНИЕ' : 'IMPACT', null, 1.15);
   }
   traffic.update(dt, bus.distance);
 
   cabin.sync(bus.position, bus.heading, bus.pitch, bus.roll);
+  // The physical side mirror should never drift into the forward view as a black block.
+  cabin.leftMirror.mesh.visible = input.isDown('lookLeft');
+  if (choices.active || endingScreen.visible) hud.prompt(null);
+  else interactions.update(dt, bus, input);
   placeCamera(dt);
   sky.update(camera, elapsed);
   sky.setDawn(Math.pow(clock.nightProgress, 2.5));
@@ -336,10 +846,14 @@ const loop = new Loop((dt, elapsed) => {
 
   // the saloon is lit by four tired domes, plus whatever passes the other way
   const glare = traffic.glareAt(bus.distance);
-  setCabinGlow(1.9 + glare * 2.4, 1 + glare * 0.35);
-  cabin.setCabinLights(0.9);
+  setCabinGlow(2.7 + glare * 2.7, 1 + glare * 0.35);
+  cabin.setCabinLights(1.35);
   // the glass picks up dust and breath as the night goes on, so it never reads as a feed
-  cabin.mirror.setCondition(0.18 + clock.nightProgress * 0.22);
+  cabin.mirror.setCondition(0.1 + clock.nightProgress * 0.12);
+  cabin.mirror.setBrightness(2.1);
+  // The driver's exterior glass sees the unlit road behind the coach, so it needs a
+  // deliberate low-light lift rather than pretending rear headlights exist.
+  cabin.leftMirror.setBrightness(4.2);
 
   if (radio) {
     radio.tune(input.axis('radioDown', 'radioUp'), dt);
@@ -370,7 +884,14 @@ const loop = new Loop((dt, elapsed) => {
   // the mirror renders first and leaves the shader uniforms pointing at its own camera,
   // so the world rig has to be restored before the main pass
   cabin.aimMirror();
+  cabin.aimLeftMirror();
   cabin.mirror.render(
+    renderer.gl,
+    scene,
+    { left: headL, right: headR, direction: headDir },
+    sky.moonDirection,
+  );
+  cabin.leftMirror.render(
     renderer.gl,
     scene,
     { left: headL, right: headR, direction: headDir },
@@ -412,11 +933,14 @@ window.addEventListener('resize', () => {
   camera.aspect = renderer.aspect;
   camera.updateProjectionMatrix();
 });
+window.addEventListener('pagehide', () => {
+  if (started && !discardSaveOnUnload) persistShift();
+});
 camera.aspect = renderer.aspect;
 camera.updateProjectionMatrix();
 
 loop.start();
 
 // a handle for poking at the sim from the console while tuning
-Object.assign(dev, { bus, path, clock, renderer, scene, camera, cabin, roster, traffic, loop, input });
+Object.assign(dev, { bus, path, clock, renderer, scene, cabin, roster, passengerDirector, traffic, loop, input, story, storyStops, interactions, journal });
 Object.assign(window as unknown as Record<string, unknown>, { LAST_EXIT: dev });
