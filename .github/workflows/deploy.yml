@@ -32,11 +32,12 @@ jobs:
       # `npm run build` type-checks first, so a broken build never reaches the site
       - run: npm run build
 
-      # enablement turns Pages on for the repository on the first run, so there is no
-      # manual switch to flip in Settings before the first deploy can land
+      # No `enablement: true` here. The workflow's own GITHUB_TOKEN cannot create the
+      # Pages site ("Resource not accessible by integration"), so turning Pages on is a
+      # one-off done with a user token or from Settings -> Pages -> Source: GitHub Actions.
+      # Leaving enablement on would make every run fail on repositories where it is not
+      # yet enabled, instead of just the first one.
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
