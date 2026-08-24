@@ -28,12 +28,15 @@ interface Slot {
   /** Set when the slot carries per-instance artwork. */
   texture?: THREE.CanvasTexture;
   label?: string;
+  /** Knocked roadside furniture stays in the world but must no longer block the coach. */
+  knocked: boolean;
 }
 
 export interface PropCollision {
   normal: THREE.Vector3;
   penetration: number;
   kind: Kind;
+  object: THREE.Object3D;
 }
 
 const COLLIDER_RADIUS: Partial<Record<Kind, number>> = {
@@ -232,7 +235,7 @@ export class PropField {
       object.visible = false;
       object.frustumCulled = true;
       this.group.add(object);
-      list.push({ kind, object, free: true });
+      list.push({ kind, object, free: true, knocked: false });
     }
     this.slots.set(kind, list);
   }
@@ -242,6 +245,7 @@ export class PropField {
     for (const slot of list) {
       if (slot.free) {
         slot.free = false;
+        slot.knocked = false;
         slot.object.visible = true;
         return slot;
       }
@@ -347,7 +351,7 @@ export class PropField {
     let deepest = 0;
     for (const slot of this.active.values()) {
       const baseRadius = COLLIDER_RADIUS[slot.kind];
-      if (!baseRadius || !slot.object.visible) continue;
+      if (!baseRadius || !slot.object.visible || slot.knocked) continue;
       const radius = baseRadius * Math.max(slot.object.scale.x, slot.object.scale.z);
       const dx = position.x - slot.object.position.x;
       const dz = position.z - slot.object.position.z;
@@ -360,9 +364,26 @@ export class PropField {
       if (penetration <= deepest) continue;
       deepest = penetration;
       this.collisionNormal.set(dx / distance, 0, dz / distance);
-      best = { normal: this.collisionNormal.clone(), penetration, kind: slot.kind };
+      best = { normal: this.collisionNormal.clone(), penetration, kind: slot.kind, object: slot.object };
     }
     return best;
+  }
+
+  /**
+   * Small roadside furniture should yield to a forty-thousand-pound coach. The pooled
+   * object remains visible where it fell, then is reset when it leaves the population window.
+   */
+  knockDown(hit: PropCollision, direction: THREE.Vector3): boolean {
+    if (hit.kind !== 'delineator' && hit.kind !== 'mile' && hit.kind !== 'sign') return false;
+    const slot = [...this.active.values()].find((candidate) => candidate.object === hit.object);
+    if (!slot || slot.knocked) return false;
+    slot.knocked = true;
+    const shove = direction.clone().setY(0).normalize();
+    hit.object.position.addScaledVector(shove, 0.45);
+    hit.object.position.addScaledVector(hit.normal, 0.28);
+    // rotate around its local base: the geometry is anchored at ground level
+    hit.object.rotation.z = hit.normal.x >= 0 ? Math.PI * 0.43 : -Math.PI * 0.43;
+    return true;
   }
 
   private dress(slot: Slot, index: number, sub: number): boolean {

@@ -101,7 +101,7 @@ export class Passenger {
       color: spec.coat,
       vertexColors: true,
       fogScale: 0,
-      ambientBoost: 1.7,
+      ambientBoost: 2.8,
       cabin: 1,
       snap: 0.3,
     });
@@ -151,7 +151,7 @@ export class Roster {
     color: 0x6b5a4c,
     vertexColors: true,
     fogScale: 0,
-    ambientBoost: 1.7,
+    ambientBoost: 2.8,
     cabin: 1,
     snap: 0.3,
   });

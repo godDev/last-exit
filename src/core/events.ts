@@ -25,7 +25,10 @@ export class EventScheduler<Ctx> {
   private events: Array<StoryEvent<Ctx>> = [];
   private fired = new Set<string>();
 
-  constructor(private readonly ctx: Ctx) {}
+  constructor(
+    private readonly ctx: Ctx,
+    private readonly onFired?: (id: string) => void,
+  ) {}
 
   add(...events: Array<StoryEvent<Ctx>>): void {
     this.events.push(...events);
@@ -38,10 +41,18 @@ export class EventScheduler<Ctx> {
       if (!e.when(state)) continue;
       this.fired.add(e.id);
       e.run(this.ctx, state);
+      // Persist only after the event has parked the coach, changed the story state or
+      // opened its modal. Saving before run() leaves a reload in the pre-event frame.
+      this.onFired?.(e.id);
     }
   }
 
   hasFired(id: string): boolean { return this.fired.has(id); }
+
+  /** Restore one-shot cues so loading a shift cannot replay an old revelation. */
+  restore(ids: Iterable<string>): void {
+    for (const id of ids) this.fired.add(id);
+  }
 }
 
 /** Minimal typed pub/sub for cross-system signals (door opened, station tuned, ...). */

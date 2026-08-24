@@ -335,6 +335,29 @@ export class Bus {
   get miles(): number { return (this.distance - this.startDistance) / METRES_PER_MILE; }
   get speedMph(): number { return Math.abs(this.speed) * MPH_PER_MS; }
 
+  /** Restore a parked coach to a route mile after the path window has been prepared. */
+  restoreMiles(miles: number): void {
+    const distance = this.startDistance + Math.max(0, miles) * METRES_PER_MILE;
+    const sample = this.path.sample(distance);
+    this.distance = distance;
+    this.stationCursor = Math.floor(distance / STATION_SPACING);
+    this.position.copy(sample.pos);
+    this.heading = sample.heading;
+    this.speed = 0;
+    this.wheelAngle = 0;
+    this.yawRate = 0;
+    // Story stops and restored saves must not leave the audio model believing the driver
+    // still has the pedal down at motorway speed while the coach is frozen in place.
+    this.throttle = 0;
+    this.braking = 0;
+    this.gear = 1;
+    this.rpm = 620;
+    this.lastAccel = 0;
+    this.rumble = 0;
+    this.updateFrame();
+    this.position.addScaledVector(this.right, 1.85);
+  }
+
   /** World-space point from bus-local (right, up, forward) metres. */
   localToWorld(right: number, up: number, forward: number, out = new THREE.Vector3()): THREE.Vector3 {
     this.updateFrame();

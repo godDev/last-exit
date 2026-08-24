@@ -141,6 +141,12 @@ export class Radio implements StationHost {
     this.dial = next.frequency;
   }
 
+  /** A scripted bulletin may only break into a station the player is actually hearing. */
+  isTuned(id: string): boolean {
+    const station = this.stations.find((candidate) => candidate.id === id);
+    return Boolean(station && this.power && Math.abs(this.dial - station.frequency) <= station.width);
+  }
+
   // --- per frame ------------------------------------------------------------
   update(dt: number): void {
     this.elapsed += dt;

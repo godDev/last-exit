@@ -32,6 +32,9 @@ export const EYE_LOCAL = new THREE.Vector3(DRIVER_X, 2.05, -4.9);
  * a 58 degree field rather than clipped by the top of the screen.
  */
 export const MIRROR_MOUNT = new THREE.Vector3(-0.34, 2.3, -5.72);
+/** Driver-side exterior mirror: it must look along the left flank, not down the aisle. */
+// Outside the driver's window, close to the A-pillar: visible without a full head turn.
+export const LEFT_MIRROR_MOUNT = new THREE.Vector3(-1.48, 2.25, -5.55);
 
 /** Local position of a seat cushion. side -1 is the driver's side of the aisle. */
 export function seatPosition(row: number, side: -1 | 1): THREE.Vector3 {
@@ -190,11 +193,13 @@ export class Cabin {
   readonly group = new THREE.Group();
   readonly dashboard: Dashboard;
   readonly mirror: Mirror;
+  readonly leftMirror: Mirror;
   /** Where passengers are parented, so the roster never touches cabin structure. */
   readonly passengerRoot = new THREE.Group();
 
   private readonly domeLights: THREE.Mesh[] = [];
   private readonly mirrorTarget = new THREE.Vector3();
+  private readonly leftMirrorTarget = new THREE.Vector3();
 
   constructor() {
     const surfaces = createRetroMaterial({
@@ -236,6 +241,14 @@ export class Cabin {
     );
     this.group.add(this.mirror.mesh);
 
+    this.leftMirror = new Mirror();
+    this.leftMirror.mesh.position.copy(LEFT_MIRROR_MOUNT);
+    this.leftMirror.mesh.quaternion.setFromUnitVectors(
+      new THREE.Vector3(0, 0, 1),
+      EYE_LOCAL.clone().sub(LEFT_MIRROR_MOUNT).normalize(),
+    );
+    this.group.add(this.leftMirror.mesh);
+
     this.group.add(this.passengerRoot);
   }
 
@@ -255,6 +268,14 @@ export class Cabin {
     this.group.localToWorld(this.mirrorTarget);
     this.mirror.aim(this.group, this.mirrorTarget);
     return this.mirror.worldPosition;
+  }
+
+  /** Aim the exterior glass down the left side of the coach and behind it, never through the cabin. */
+  aimLeftMirror(): THREE.Vector3 {
+    this.leftMirrorTarget.set(-3.0, FLOOR_Y + 0.9, 7.4);
+    this.group.localToWorld(this.leftMirrorTarget);
+    this.leftMirror.aim(this.group, this.leftMirrorTarget);
+    return this.leftMirror.worldPosition;
   }
 
   /** 0 = dome lights off, 1 = full. The saloon lamps and the shader glow move together. */

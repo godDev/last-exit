@@ -9,6 +9,10 @@ Night. October 1991. A fictional state where Nevada, Arizona and California meet
 You drive Western Trails route 17: Las Palmas → Red Creek → Ashford → Silver Lake → Carson,
 about 400 miles of desert, out at 22:30, due in around 06:00.
 
+The fiction retains that 400-mile route; the playable prototype compresses the authored
+encounters into its first 16 physical miles. The first stop appears in roughly two minutes
+of normal driving, with the later acts spaced two to three minutes apart.
+
 This repository is **not the game**. It is the prototype that proves the four load-bearing
 mechanics work in a browser and feel the way they need to feel:
 
@@ -17,10 +21,13 @@ mechanics work in a browser and feel the way they need to feel:
 3. **the rear-view mirror**, which can show something the cabin does not contain,
 4. **the radio**, a real dial across a real band with programmes already in progress.
 
-There is no story yet. The event scheduler, the passenger manifest and the bilingual script
-system are all in place so that the acts — Mile 86, the gas station, the highway patrol,
-the motel, the twelve passengers thirty miles out — can be written as content rather than
-as engine work.
+The story layer is now in progress: the event scheduler, passenger manifest, bilingual
+script system, persistent shift state, authored stops and on-foot interactions are in place.
+The acts — Mile 86, the gas station, highway patrol, motel and the final twelve passengers —
+can now be added as content rather than engine work.
+
+The game design and shared implementation board live in [docs/DESIGN.md](docs/DESIGN.md) and
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Running it
 
@@ -42,8 +49,12 @@ npm run build
 |---|---|
 | `W` / `S` | throttle / brake; hold `S` after stopping to reverse |
 | `A` / `D` | steer |
-| `SPACE` | glance at the mirror (hold) |
-| `Q` / `E` | look around the cab |
+| `SPACE` | glance at the cabin mirror (hold) |
+| `Q` | look at the left side mirror |
+| `X` | look right around the cab |
+| `J` | open / close the driver's journal |
+| `1` / `2` / `3` | choose one of the first three story responses |
+| `↑` / `↓`, `ENTER` | navigate and confirm any story response, including the final choice |
 | `R` | radio on/off |
 | `[` `]` | tune down / up the band |
 | `T` | seek to the next station |
@@ -51,10 +62,10 @@ npm run build
 | `F` | air brakes |
 | `L` | switch language (EN / RU) |
 | `P` | autopilot — hands off the wheel, so you can just look |
-| `G` | mirror demo: cycles the three passenger states |
-| `C` | inspect the cab from three fixed vantage points |
 | `ESC` | pause |
-| `F3` | diagnostics |
+
+The development server additionally enables diagnostics, story jumps, mirror-state demos
+and cabin inspection controls. They are deliberately unavailable in the published build.
 
 `C` is not a tourist feature. Everything in the cab is placed by its angle from the
 driver's eye at `(DRIVER_X, 2.05, -4.90)`, and placing it by eye from the driver's seat
@@ -128,7 +139,6 @@ src/
 
 ## What is deliberately not here
 
-The story and its acts, leaving the bus on foot, conversations with passengers, the police
-stop, the motel, the deduction system for finding which passenger the bus cannot leave the
-route without, and saves. The engine is shaped for all of it: triggers in
-`src/core/events.ts`, people in `src/bus/passengers.ts`, lines in `src/content/`.
+Free-form passenger conversations, combat, chases, random deaths and external art or audio
+assets. The current shift is a compact authored investigation: its consequences live in the
+mirror, radio, journal and final passenger choice.
