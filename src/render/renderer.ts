@@ -1,0 +1,89 @@
+import * as THREE from 'three';
+import { PostPass } from './post';
+import { settings } from '../core/settings';
+import { shared } from './retroMaterial';
+
+/**
+ * Draws the world into a small offscreen buffer, then blows it up through the VHS pass.
+ *
+ * Colour management is switched off deliberately. Nothing here is physically lit, the
+ * palette is authored by hand, and an automatic sRGB transform in the middle would mean
+ * the colour picked in code is not the colour on screen.
+ */
+export class Renderer {
+  readonly gl: THREE.WebGLRenderer;
+  readonly post: PostPass;
+  /** Public so tooling can read the frame back without depending on a screenshot. */
+  readonly target: THREE.WebGLRenderTarget;
+  private width = 480;
+  private height = 270;
+
+  constructor(canvas: HTMLCanvasElement) {
+    THREE.ColorManagement.enabled = false;
+
+    this.gl = new THREE.WebGLRenderer({
+      canvas,
+      antialias: false,
+      powerPreference: 'high-performance',
+      stencil: false,
+    });
+    this.gl.outputColorSpace = THREE.LinearSRGBColorSpace;
+    this.gl.setPixelRatio(1); // the upscale is the effect; a sharp one would defeat it
+    this.gl.setClearColor(0x000000, 1);
+    this.gl.autoClear = true;
+
+    this.target = new THREE.WebGLRenderTarget(this.width, this.height, {
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      depthBuffer: true,
+      colorSpace: THREE.LinearSRGBColorSpace,
+    });
+
+    this.post = new PostPass(this.target.texture);
+    this.resize();
+    window.addEventListener('resize', () => this.resize());
+  }
+
+  get aspect(): number {
+    return this.width / this.height;
+  }
+
+  resize(): void {
+    const w = Math.max(320, window.innerWidth);
+    const h = Math.max(180, window.innerHeight);
+    this.gl.setSize(w, h, false);
+
+    this.height = settings.renderHeight;
+    this.width = Math.min(960, Math.round((this.height * w) / h / 2) * 2);
+    this.target.setSize(this.width, this.height);
+    this.post.setSource(this.target.texture, this.width, this.height);
+    shared.uSnapRes.value.set(this.width * 0.66, this.height * 0.66);
+  }
+
+  /**
+   * Cost of the world itself. `gl.info` resets on every render call, so by the time the
+   * frame is on screen it only describes the fullscreen quad — snapshot it in between.
+   */
+  readonly stats = { calls: 0, triangles: 0 };
+
+  /** Render the world small, then present it large through the tape. */
+  present(scene: THREE.Scene, camera: THREE.Camera, elapsed: number): void {
+    shared.uTime.value = elapsed;
+    this.post.time = elapsed;
+    this.post.retro = settings.retro;
+
+    this.gl.setRenderTarget(this.target);
+    this.gl.clear();
+    this.gl.render(scene, camera);
+    this.stats.calls = this.gl.info.render.calls;
+    this.stats.triangles = this.gl.info.render.triangles;
+
+    this.gl.setRenderTarget(null);
+    this.gl.render(this.post.scene, this.post.camera);
+  }
+
+  dispose(): void {
+    this.target.dispose();
+    this.gl.dispose();
+  }
+}

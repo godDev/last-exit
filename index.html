@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>LAST EXIT</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/src/ui/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="view"></canvas>
+
+      <div id="overlay">
+        <div id="subtitles" class="subs"></div>
+        <div id="hud" class="hud"></div>
+        <div id="debug" class="debug hidden"></div>
+      </div>
+
+      <div id="boot" class="boot">
+        <div class="boot-inner">
+          <h1>LAST&nbsp;EXIT</h1>
+          <p class="boot-sub">Western Trails &mdash; Route 17 &mdash; October 1991</p>
+          <p class="boot-note" data-i18n="boot.note"></p>
+          <button id="boot-start" class="boot-btn">START ENGINE</button>
+          <div class="boot-lang">
+            <button data-lang="en" class="lang-btn">EN</button>
+            <button data-lang="ru" class="lang-btn">RU</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
