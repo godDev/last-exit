@@ -1,5 +1,10 @@
 # LAST EXIT — technical prototype
 
+**Play it: https://goddev.github.io/last-exit/**
+
+Headphones help. Every sound in it is synthesised in the browser.
+
+
 Night. October 1991. A fictional state where Nevada, Arizona and California meet.
 You drive Western Trails route 17: Las Palmas → Red Creek → Ashford → Silver Lake → Carson,
 about 400 miles of desert, out at 22:30, due in around 06:00.
