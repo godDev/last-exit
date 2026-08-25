@@ -6,6 +6,9 @@ import { RoutePath } from './curvature';
 /** Sparse, pooled highway traffic. Vehicle forward is +Z. */
 type Kind = 'car' | 'truck';
 
+/** One truck for every fifteen cars in the oncoming traffic mix. */
+const ONCOMING_TRUCK_CHANCE = 1 / 16;
+
 interface Vehicle {
   kind: Kind;
   object: THREE.Group;
@@ -180,6 +183,7 @@ export class Traffic {
   readonly group = new THREE.Group();
   private readonly pool: Vehicle[] = [];
   private timer = 12;
+  private hasSpawnedOncoming = false;
 
   constructor(private readonly path: RoutePath, private readonly random: () => number) {
     const head = glareTexture('rgba(255,255,246,1)', 'rgba(255,232,190,0.75)');
@@ -216,9 +220,12 @@ export class Traffic {
   }
 
   private spawn(busDistance: number): void {
-    const free = this.pool.find((v) => !v.active);
-    if (!free) return;
     const oncoming = this.random() > 0.32;
+    const firstOncoming = oncoming && !this.hasSpawnedOncoming;
+    const kind: Kind = firstOncoming || (oncoming && this.random() < ONCOMING_TRUCK_CHANCE) ? 'truck' : 'car';
+    const free = this.pool.find((vehicle) => !vehicle.active && vehicle.kind === kind);
+    if (!free) return;
+    if (oncoming) this.hasSpawnedOncoming = true;
     free.active = true;
     free.object.visible = true;
     free.direction = oncoming ? -1 : 1;
