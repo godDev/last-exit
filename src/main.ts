@@ -971,6 +971,7 @@ const loop = new Loop((dt, elapsed) => {
     speedMph: bus.speedMph,
     rpm: bus.rpm,
     wheelAngle: bus.wheelAngle,
+    gear: bus.gear,
     miles: bus.miles,
     clock: clock.format(),
     highBeam: bus.highBeam,

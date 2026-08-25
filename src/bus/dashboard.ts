@@ -195,6 +195,7 @@ export class Dashboard {
   private lastPowered = false;
   private readonly dialWidth = 0.29;
   private readonly stalk = new THREE.Group();
+  private readonly gearStick = new THREE.Group();
 
   constructor(driverX: number) {
     // Kept dark deliberately. The dash fills the bottom third of every frame for four
@@ -429,6 +430,100 @@ export class Dashboard {
     this.wheel.rotation.x = -(Math.PI / 2 - COLUMN_TILT);
     this.group.add(this.wheel);
 
+    // --- floor-mounted gearbox lever ------------------------------------------
+    // The old coach uses a long manual lever beside the driver's right knee. Keep it
+    // separate from the dashboard so its silhouette remains readable against the aisle.
+    const gearLever = new THREE.Group();
+    gearLever.position.set(driverX + 0.48, 1.08, -4.88);
+
+    const mount = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.055, 0.24), shell);
+    mount.position.y = 0.025;
+    gearLever.add(mount);
+    const mountBoltMaterial = createRetroMaterial({ color: 0x69665f, fogScale: 0, ambientBoost: 2.3, cabin: 1, snap: 0.1 });
+    for (const x of [-0.072, 0.072]) for (const z of [-0.09, 0.09]) {
+      const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.008, 8), mountBoltMaterial);
+      bolt.position.set(x, 0.057, z);
+      gearLever.add(bolt);
+    }
+
+    const boot = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.105, 0.17, 10), trim);
+    boot.position.y = 0.13;
+    gearLever.add(boot);
+    // Raised folds stop the gaiter reading as a smooth traffic cone.
+    const bootFoldMaterial = createRetroMaterial({ color: 0x343028, fogScale: 0, ambientBoost: 1.8, cabin: 0.8, snap: 0.12 });
+    for (const y of [0.075, 0.12, 0.165]) {
+      const foldRadius = THREE.MathUtils.lerp(0.095, 0.048, (y - 0.075) / 0.09);
+      const fold = new THREE.Mesh(new THREE.TorusGeometry(foldRadius, 0.008, 5, 12), bootFoldMaterial);
+      fold.rotation.x = Math.PI / 2;
+      fold.position.y = y;
+      gearLever.add(fold);
+    }
+
+    const shaftMaterial = createRetroMaterial({ color: 0x77746d, fogScale: 0, ambientBoost: 2.5, cabin: 1, snap: 0.1 });
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.015, 0.43, 10), shaftMaterial);
+    shaft.position.set(0, 0.37, -0.055);
+    shaft.rotation.x = -0.25;
+    this.gearStick.add(shaft);
+
+    // Pull-up collar for reverse and a small retaining ferrule below the knob.
+    const knobMaterial = createRetroMaterial({ color: 0x211e19, fogScale: 0, ambientBoost: 2.1, cabin: 0.9, snap: 0.1 });
+    const reverseCollar = new THREE.Mesh(new THREE.CylinderGeometry(0.027, 0.022, 0.055, 12), knobMaterial);
+    reverseCollar.position.set(0, 0.535, -0.095);
+    reverseCollar.rotation.x = -0.25;
+    this.gearStick.add(reverseCollar);
+    const collarRing = new THREE.Mesh(new THREE.TorusGeometry(0.026, 0.004, 6, 14), shaftMaterial);
+    collarRing.rotation.x = Math.PI / 2 - 0.25;
+    collarRing.position.set(0, 0.558, -0.101);
+    this.gearStick.add(collarRing);
+
+    const knob = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 8), knobMaterial);
+    knob.scale.set(1, 0.86, 1.08);
+    knob.position.set(0, 0.59, -0.11);
+    this.gearStick.add(knob);
+
+    const shiftPattern = canvasTexture(128, 128, (ctx, w, h) => {
+      ctx.fillStyle = '#b9b2a2';
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, w * 0.48, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#292722';
+      ctx.lineWidth = 7;
+      ctx.lineCap = 'round';
+      // The driver's "rose": three gates joined by the neutral channel.
+      for (const x of [34, 64, 94]) {
+        ctx.beginPath();
+        ctx.moveTo(x, 38);
+        ctx.lineTo(x, 90);
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.moveTo(34, 64);
+      ctx.lineTo(94, 64);
+      ctx.stroke();
+      ctx.fillStyle = '#171613';
+      ctx.font = 'bold 19px Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const [label, x, y] of [['1', 23, 27], ['2', 23, 101], ['3', 64, 27], ['4', 64, 101], ['5', 105, 27], ['R', 105, 101]] as const) {
+        ctx.fillText(label, x, y);
+      }
+    });
+    const shiftCap = new THREE.Mesh(
+      new THREE.CircleGeometry(0.041, 20),
+      createRetroMaterial({ map: shiftPattern, fogScale: 0, ambientBoost: 2.8, cabin: 1.1, snap: 0.08 }),
+    );
+    shiftCap.rotation.x = -Math.PI / 2;
+    shiftCap.position.set(0, 0.643, -0.11);
+    this.gearStick.add(shiftCap);
+    const capBezel = new THREE.Mesh(new THREE.TorusGeometry(0.041, 0.004, 6, 20), shaftMaterial);
+    capBezel.rotation.x = Math.PI / 2;
+    capBezel.position.set(0, 0.644, -0.11);
+    this.gearStick.add(capBezel);
+
+    gearLever.add(this.gearStick);
+
+    this.group.add(gearLever);
+
     // the whole binnacle belongs to the driver's eyes, not to the mirror
     this.group.traverse((child) => child.layers.set(LAYER_DIRECT_ONLY));
   }
@@ -568,6 +663,7 @@ export class Dashboard {
     speedMph: number;
     rpm: number;
     wheelAngle: number;
+    gear: number | 'R';
     miles: number;
     clock: string;
     highBeam: boolean;
@@ -580,6 +676,21 @@ export class Dashboard {
 
     // rotation order is XYZ, so the spin about Z happens before the column tilt about X
     this.wheel.rotation.z = data.wheelAngle * 2.6;
+
+    // Follow the H-pattern engraved on the knob. At rest the lever returns to the neutral
+    // channel; forward gears alternate front/back while moving across the three gates.
+    const moving = data.speedMph >= 0.5;
+    const positions: Record<number | 'R', { x: number; z: number }> = {
+      1: { x: -0.16, z: 0.14 },
+      2: { x: 0.13, z: 0.14 },
+      3: { x: -0.16, z: 0 },
+      4: { x: 0.13, z: 0 },
+      5: { x: -0.16, z: -0.14 },
+      R: { x: 0.14, z: -0.14 },
+    };
+    const lever = moving ? positions[data.gear] ?? positions[5] : { x: 0, z: 0 };
+    this.gearStick.rotation.x = THREE.MathUtils.lerp(this.gearStick.rotation.x, lever.x, 0.16);
+    this.gearStick.rotation.z = THREE.MathUtils.lerp(this.gearStick.rotation.z, lever.z, 0.16);
 
     if (data.clock !== this.lastClock) {
       this.lastClock = data.clock;
