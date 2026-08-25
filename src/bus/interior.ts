@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { createRetroMaterial } from '../render/retroMaterial';
+import { createPBRMaterial, enablePBRShadows } from '../render/pbrMaterial';
+import { canvasTexture } from '../render/textures';
 import { Dashboard } from './dashboard';
-import { Mirror, LAYER_DIRECT_ONLY } from './mirror';
+import { Mirror, LAYER_DIRECT_ONLY, LAYER_MIRROR_ONLY } from './mirror';
 
 /**
  * The saloon of a 1970s intercity coach.
@@ -87,15 +89,23 @@ function buildShell(): THREE.BufferGeometry {
   const midZ = 0;
   const parts: THREE.BufferGeometry[] = [];
 
-  // floor, with a raised aisle strip so the ribbed rubber reads at a glance
-  parts.push(box(HALF_WIDTH * 2, 0.08, length, 0, FLOOR_Y - 0.04, midZ, 0x26221c));
-  parts.push(box(0.52, 0.02, length - 1.2, 0, FLOOR_Y + 0.01, midZ + 0.2, RUBBER));
+  // Floor with an open driver's footwell. A single full-length slab sat immediately
+  // below the eye and projected as a huge black trapezoid whenever the player looked at
+  // the pedals. The passenger side and the rear saloon retain their physical floor.
+  const footwellBack = -1.3;
+  const rearFloorLength = back - footwellBack;
+  parts.push(box(HALF_WIDTH * 2, 0.08, rearFloorLength, 0, FLOOR_Y - 0.04, (footwellBack + back) * 0.5, 0x26221c));
+  const frontFloorLength = footwellBack - front;
+  const passengerFloorLeft = -0.2;
+  const passengerFloorWidth = HALF_WIDTH - passengerFloorLeft;
+  parts.push(box(passengerFloorWidth, 0.08, frontFloorLength, passengerFloorLeft + passengerFloorWidth * 0.5, FLOOR_Y - 0.04, (front + footwellBack) * 0.5, 0x26221c));
+  parts.push(box(0.52, 0.02, rearFloorLength - 0.25, 0, FLOOR_Y + 0.01, (footwellBack + back) * 0.5, RUBBER));
   // moulded anti-slip ribs and aluminium aisle edging
-  for (let z = front + 0.8; z < back - 0.45; z += 0.22) {
+  for (let z = footwellBack + 0.12; z < back - 0.45; z += 0.22) {
     parts.push(box(0.46, 0.008, 0.018, 0, FLOOR_Y + 0.024, z, 0x35312b));
   }
   for (const side of [-1, 1]) {
-    parts.push(box(0.025, 0.025, length - 1.2, side * 0.28, FLOOR_Y + 0.035, 0.2, 0x625b4d));
+    parts.push(box(0.025, 0.025, rearFloorLength - 0.25, side * 0.28, FLOOR_Y + 0.035, (footwellBack + back) * 0.5, 0x625b4d));
   }
 
   // roof and the luggage racks under it
@@ -108,6 +118,12 @@ function buildShell(): THREE.BufferGeometry {
   for (const side of [-1, 1]) {
     parts.push(box(0.46, 0.06, length - 3.4, side * 0.98, ROOF_Y - 0.34, midZ + 0.6, TRIM));
     parts.push(box(0.05, 0.3, length - 3.4, side * 0.75, ROOF_Y - 0.2, midZ + 0.6, TRIM));
+    // Aluminium rack lip, underside slats and regular suspension brackets.
+    parts.push(box(0.035, 0.075, length - 3.5, side * 0.72, ROOF_Y - 0.36, midZ + 0.6, 0x716b60));
+    for (let z = front + 2.4; z < back - 0.5; z += 0.82) {
+      parts.push(box(0.46, 0.025, 0.035, side * 0.98, ROOF_Y - 0.37, z, 0x5d574d));
+      parts.push(box(0.035, 0.31, 0.035, side * 0.76, ROOF_Y - 0.2, z, 0x4e4941));
+    }
   }
 
   // side walls: sill below the glass, header above it, pillars between
@@ -118,6 +134,11 @@ function buildShell(): THREE.BufferGeometry {
     // waist rail, lower kick strip and stamped panel dividers
     parts.push(box(0.085, 0.055, length - 0.4, x - side * 0.012, FLOOR_Y + 0.62, 0.1, 0x50483c));
     parts.push(box(0.085, 0.045, length - 0.4, x - side * 0.012, FLOOR_Y + 0.08, 0.1, 0x171511));
+    // Scraped kick panels and irregular repair plates accumulate along the lower wall.
+    for (let patch = 0; patch < 6; patch++) {
+      const z = front + 1.0 + patch * 1.82 + (side > 0 ? 0.27 : 0);
+      parts.push(box(0.008, 0.08 + (patch % 2) * 0.035, 0.3 + (patch % 3) * 0.11, x - side * 0.05, FLOOR_Y + 0.14, z, patch % 2 ? 0x39332b : 0x443b31));
+    }
     for (let z = front + 0.72; z < back - 0.4; z += 0.82) {
       parts.push(box(0.085, 0.5, 0.018, x - side * 0.012, FLOOR_Y + 0.32, z, 0x171511));
     }
@@ -151,6 +172,12 @@ function buildShell(): THREE.BufferGeometry {
   // grab rails down the aisle
   parts.push(box(0.045, 0.045, length - 4.2, -0.26, ROOF_Y - 0.46, midZ + 0.9, 0x35312a));
   parts.push(box(0.045, 0.045, length - 4.2, 0.26, ROOF_Y - 0.46, midZ + 0.9, 0x35312a));
+  for (let z = front + 2.6; z < back - 0.65; z += 1.64) {
+    for (const x of [-0.26, 0.26]) {
+      parts.push(box(0.035, 0.5, 0.035, x, ROOF_Y - 0.7, z, 0x615a4e));
+      parts.push(box(0.15, 0.035, 0.035, x > 0 ? x - 0.055 : x + 0.055, ROOF_Y - 0.94, z, 0x81755f));
+    }
+  }
 
   return merged(parts, 'shell');
 }
@@ -168,6 +195,12 @@ function buildSeats(): THREE.BufferGeometry {
       const colour = row % 2 === 0 ? cloth : clothAlt;
       // cushion
       parts.push(box(0.98, 0.13, 0.5, x, FLOOR_Y + 0.44, z, colour));
+      // Raised side bolsters and a worn centre panel keep the cushion from reading as a
+      // single rectangular slab when the dome lights rake across it.
+      for (const edge of [-1, 1]) {
+        parts.push(box(0.12, 0.08, 0.46, x + edge * 0.42, FLOOR_Y + 0.52, z, row % 2 === 0 ? 0x3a323d : 0x3e342f));
+      }
+      parts.push(box(0.58, 0.012, 0.27, x, FLOOR_Y + 0.512, z - 0.035, row % 3 === 0 ? 0x463b42 : 0x3b3338));
       // backrest, reclined a touch
       const back = box(0.98, 0.66, 0.11, x, FLOOR_Y + 0.83, z + 0.26, colour);
       back.rotateX(0.07);
@@ -176,16 +209,22 @@ function buildSeats(): THREE.BufferGeometry {
       parts.push(box(0.04, 0.6, 0.1, x, FLOOR_Y + 0.85, z + 0.26, frame));
       for (const half of [-1, 1]) {
         parts.push(box(0.4, 0.16, 0.1, x + half * 0.25, FLOOR_Y + 1.2, z + 0.29, colour));
+        // Faded head contact patches are subtle in colour but catch the upgraded light.
+        if ((row + half) % 3 === 0) {
+          parts.push(box(0.22, 0.07, 0.012, x + half * 0.25, FLOOR_Y + 1.22, z + 0.228, 0x4a4144));
+        }
       }
+      // Aisle armrest with a small rubbed cap.
+      const aisle = side < 0 ? 1 : -1;
+      parts.push(box(0.08, 0.08, 0.42, x + aisle * 0.52, FLOOR_Y + 0.69, z + 0.02, frame));
+      parts.push(box(0.09, 0.025, 0.21, x + aisle * 0.52, FLOOR_Y + 0.742, z - 0.06, 0x554b42));
       // pedestal
       parts.push(box(0.16, 0.36, 0.16, x, FLOOR_Y + 0.2, z, frame));
     }
   }
 
-  // the driver's own seat, facing the same way as everyone else
-  parts.push(box(0.52, 0.12, 0.48, DRIVER_X, FLOOR_Y + 0.36, -4.62, 0x201d1a));
-  parts.push(box(0.52, 0.62, 0.1, DRIVER_X, FLOOR_Y + 0.72, -4.38, 0x201d1a));
-  parts.push(box(0.18, 0.32, 0.18, DRIVER_X, FLOOR_Y + 0.16, -4.62, frame));
+  // The driver's seat is omitted from the direct cabin mesh: the camera occupies it,
+  // and the downward head movement would otherwise clip through its back and cushion.
 
   return merged(parts, 'seats');
 }
@@ -247,30 +286,51 @@ export class Cabin {
   private doorTarget = 0;
 
   constructor() {
-    const surfaces = createRetroMaterial({
+    const shellSurfaces = createPBRMaterial({
+      surface: 'plastic',
       vertexColors: true,
-      // inside the bus there is no distance and therefore no fog
-      fogScale: 0,
-      ambientBoost: 2.8,
-      cabin: 1,
-      snap: 0.25,
+      roughness: 0.76,
       side: THREE.DoubleSide,
     });
+    const seatSurfaces = createPBRMaterial({ surface: 'fabric', vertexColors: true, side: THREE.DoubleSide });
 
-    const shell = new THREE.Mesh(buildShell(), surfaces);
-    const seats = new THREE.Mesh(buildSeats(), surfaces);
+    const shell = new THREE.Mesh(buildShell(), shellSurfaces);
+    const seats = new THREE.Mesh(buildSeats(), seatSurfaces);
     shell.frustumCulled = false;
     seats.frustumCulled = false;
-    this.group.add(shell, seats, this.buildExterior());
+    // The exterior shell already casts the coach shadow. Letting the merged interior
+    // receive the moving moon shadow map causes texel shimmer across the ceiling when the
+    // player looks up, while adding no useful cabin depth.
+    shell.castShadow = false;
+    shell.receiveShadow = false;
+    seats.castShadow = false;
+    seats.receiveShadow = false;
+    const exterior = this.buildExterior();
+    // The driver is inside this geometry. Rendering it through the direct camera makes
+    // the lower body panels clip into view as huge black rectangles when looking down.
+    // Mirrors still need the complete coach body, so keep it exclusively on their layer.
+    exterior.traverse((child) => {
+      child.layers.set(LAYER_MIRROR_ONLY);
+      // The coach shadow lies directly below the driver's eye. Looking down exposed its
+      // coarse shadow-map silhouette as enormous black zigzags across the footwell.
+      // Other world objects still cast shadows; only the bus stops shadowing itself.
+      if (child instanceof THREE.Mesh) child.castShadow = false;
+    });
+    const saloonDetails = this.buildSaloonDetails();
+    this.group.add(shell, seats, saloonDetails, exterior);
 
-    // dim amber dome lights: the only light in the saloon all night
-    const lamp = createRetroMaterial({ color: 0xffcc88, mode: 'emissive', emissive: 0.5, snap: 0.2 });
-    for (let i = 0; i < 4; i++) {
-      const light = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.14), lamp);
+    // A row of tired fluorescent-style fixtures: metal bezel, cloudy diffuser and the
+    // emissive panel itself. Six smaller pools read more naturally than four bare planes.
+    const lamp = createRetroMaterial({ color: 0xffd6a0, mode: 'emissive', emissive: 0.5, snap: 0.16 });
+    const lampHousing = createPBRMaterial({ surface: 'metal', color: 0x4b4942, roughness: 0.64 });
+    for (let i = 0; i < 6; i++) {
+      const housing = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.035, 0.22), lampHousing);
+      housing.position.set(0, ROOF_Y - 0.045, -3.8 + i * 1.72);
+      const light = new THREE.Mesh(new THREE.PlaneGeometry(0.38, 0.14), lamp);
       light.rotation.x = Math.PI / 2;
-      light.position.set(0, ROOF_Y - 0.06, -3.6 + i * 2.6);
+      light.position.set(0, ROOF_Y - 0.068, -3.8 + i * 1.72);
       this.domeLights.push(light);
-      this.group.add(light);
+      this.group.add(housing, light);
     }
 
     this.dashboard = new Dashboard(DRIVER_X);
@@ -299,6 +359,77 @@ export class Cabin {
     this.group.add(this.passengerRoot);
   }
 
+  /** Interior-facing glass and cloth kept separate from the merged structural shell. */
+  private buildSaloonDetails(): THREE.Group {
+    const root = new THREE.Group();
+    root.name = 'saloon-windows-curtains';
+    const grime = canvasTexture(128, 128, (ctx, w, h) => {
+      ctx.fillStyle = 'rgba(22,34,42,.72)';
+      ctx.fillRect(0, 0, w, h);
+      const glow = ctx.createLinearGradient(0, 0, 0, h);
+      glow.addColorStop(0, 'rgba(118,132,145,.2)');
+      glow.addColorStop(0.45, 'rgba(20,30,38,.03)');
+      glow.addColorStop(1, 'rgba(4,8,12,.25)');
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = 'rgba(188,178,155,.11)';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 9; i++) {
+        ctx.beginPath();
+        ctx.moveTo((i * 37) % w, (i * 23) % h);
+        ctx.quadraticCurveTo(w * 0.5, (i * 47) % h, (i * 71 + 28) % w, h);
+        ctx.stroke();
+      }
+      for (let i = 0; i < 45; i++) {
+        ctx.fillStyle = `rgba(205,195,176,${0.025 + (i % 4) * 0.012})`;
+        ctx.fillRect((i * 43) % w, (i * 67) % h, 2 + (i % 3), 2 + ((i + 1) % 3));
+      }
+    });
+    const glass = createPBRMaterial({
+      surface: 'glass',
+      color: 0x81919b,
+      map: grime,
+      transparent: true,
+      opacity: 0.32,
+      roughness: 0.24,
+      side: THREE.DoubleSide,
+    });
+    glass.depthWrite = false;
+
+    const curtainParts: THREE.BufferGeometry[] = [];
+    const paneZ = [-4.44, -3.18, -1.92, -0.66, 0.6, 1.86, 3.12, 4.38];
+    for (const side of [-1, 1]) {
+      for (let paneIndex = 0; paneIndex < paneZ.length; paneIndex++) {
+        const z = paneZ[paneIndex];
+        if (side > 0 && z < -3.75) continue;
+        const pane = new THREE.Mesh(new THREE.PlaneGeometry(1.04, 0.96), glass);
+        pane.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
+        pane.position.set(side * (HALF_WIDTH - 0.045), 2.24, z);
+        pane.renderOrder = 4;
+        root.add(pane);
+
+        const curtainColor = paneIndex % 3 === 0 ? 0x4b3d35 : 0x40363a;
+        for (const edge of [-1, 1]) {
+          const curtainZ = z + edge * 0.48;
+          curtainParts.push(box(0.035, 0.88, 0.15, side * (HALF_WIDTH - 0.09), 2.25, curtainZ, curtainColor));
+          // Shallow pleats remain visible as alternating highlights at driving distance.
+          for (let pleat = -1; pleat <= 1; pleat++) {
+            curtainParts.push(box(0.02, 0.84, 0.025, side * (HALF_WIDTH - 0.105), 2.25, curtainZ + pleat * 0.042, 0x625047));
+          }
+        }
+      }
+      curtainParts.push(box(0.07, 0.12, 9.9, side * (HALF_WIDTH - 0.08), 2.79, 0.25, 0x302a28));
+    }
+    const curtains = new THREE.Mesh(
+      merged(curtainParts, 'saloon curtains'),
+      createPBRMaterial({ surface: 'fabric', vertexColors: true, roughness: 1, side: THREE.DoubleSide }),
+    );
+    curtains.castShadow = false;
+    curtains.receiveShadow = false;
+    root.add(curtains);
+    return root;
+  }
+
   /**
    * Exterior coach body. The cabin used to be readable only as a box of interior panels
    * once the player stepped outside. This second skin gives it the broad painted panels,
@@ -312,14 +443,14 @@ export class Cabin {
     const paintParts: THREE.BufferGeometry[] = [];
     const trimParts: THREE.BufferGeometry[] = [];
     const chromeParts: THREE.BufferGeometry[] = [];
-    const glassMaterial = createRetroMaterial({
+    const glassMaterial = createPBRMaterial({
+      surface: 'glass',
       color: 0x0d1820,
       transparent: true,
-      opacity: 0.5,
-      depthWrite: false,
-      snap: 0.25,
-      ambientBoost: 0.7,
+      opacity: 0.44,
+      roughness: 0.16,
     });
+    glassMaterial.depthWrite = false;
     const add = (
       target: THREE.BufferGeometry[],
       w: number,
@@ -409,19 +540,68 @@ export class Cabin {
     add(trimParts, 2.66, 0.08, 0.07, 0, 2.82, back + 0.18, 0x151719);
 
     root.add(
-      new THREE.Mesh(merged(paintParts, 'exterior paint'), createRetroMaterial({ vertexColors: true, snap: 0.45 })),
-      new THREE.Mesh(merged(trimParts, 'exterior trim'), createRetroMaterial({ vertexColors: true, snap: 0.35 })),
-      new THREE.Mesh(merged(chromeParts, 'exterior chrome'), createRetroMaterial({ vertexColors: true, snap: 0.22, ambientBoost: 1.18 })),
+      new THREE.Mesh(merged(paintParts, 'exterior paint'), createPBRMaterial({ surface: 'paint', vertexColors: true, roughness: 0.48 })),
+      new THREE.Mesh(merged(trimParts, 'exterior trim'), createPBRMaterial({ surface: 'plastic', vertexColors: true })),
+      new THREE.Mesh(merged(chromeParts, 'exterior chrome'), createPBRMaterial({ surface: 'metal', vertexColors: true })),
     );
+
+    // Service hardware and underbody detail become visible at authored stops, where the
+    // player can walk close enough for the original broad panels to feel unfinished.
+    const darkMetal = createPBRMaterial({ surface: 'metal', color: 0x24282a, roughness: 0.58, metalness: 0.68 });
+    const brushed = createPBRMaterial({ surface: 'metal', color: 0x777b78, roughness: 0.36 });
+
+    // Twin fuel tanks, chassis rails and rear exhaust.
+    for (const z of [-1.45, 1.15]) {
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 1.55, 16), brushed);
+      tank.rotation.z = Math.PI / 2;
+      tank.position.set(0, 0.72, z);
+      root.add(tank);
+      for (const x of [-0.58, 0.58]) {
+        const strap = new THREE.Mesh(new THREE.TorusGeometry(0.305, 0.025, 6, 16), darkMetal);
+        strap.rotation.y = Math.PI / 2;
+        strap.position.set(x, 0.72, z);
+        root.add(strap);
+      }
+    }
+    for (const x of [-0.82, 0.82]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.18, 8.5), darkMetal);
+      rail.position.set(x, 0.63, 0.2);
+      root.add(rail);
+    }
+    const exhaust = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 2.15, 10), darkMetal);
+    exhaust.position.set(-1.18, 2.0, back - 0.5);
+    root.add(exhaust);
+    const exhaustTip = new THREE.Mesh(new THREE.TorusGeometry(0.062, 0.012, 6, 12), darkMetal);
+    exhaustTip.rotation.x = Math.PI / 2;
+    exhaustTip.position.set(-1.18, 3.08, back - 0.5);
+    root.add(exhaustTip);
+
+    // Roof ventilation pods and rear engine cooling louvres.
+    for (const z of [-1.8, 1.65]) {
+      const pod = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.13, 1.05), createPBRMaterial({ surface: 'paint', color: 0x303a3e, roughness: 0.62 }));
+      pod.position.set(0, 3.32, z);
+      root.add(pod);
+      for (let i = -3; i <= 3; i++) {
+        const vent = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.025, 0.82), darkMetal);
+        vent.position.set(i * 0.09, 3.395, z);
+        root.add(vent);
+      }
+    }
+    for (let y = 1.0; y <= 1.55; y += 0.09) {
+      const louvre = new THREE.Mesh(new THREE.BoxGeometry(1.22, 0.035, 0.04), darkMetal);
+      louvre.position.set(0, y, back + 0.19);
+      root.add(louvre);
+    }
 
     this.addCoachDoor(root, sideX, glassMaterial);
     this.addCoachLights(root, front, back);
     this.addCoachWheels(root);
     this.addCoachDecals(root, front, back);
+    enablePBRShadows(root);
     return root;
   }
 
-  private addCoachDoor(root: THREE.Group, sideX: number, glassMaterial: THREE.ShaderMaterial): void {
+  private addCoachDoor(root: THREE.Group, sideX: number, glassMaterial: THREE.Material): void {
     const panel = createRetroMaterial({ color: 0x34444d, snap: 0.32 });
     const trim = createRetroMaterial({ color: 0x151719, snap: 0.22 });
     const chrome = createRetroMaterial({ color: 0x9b9d93, snap: 0.16, ambientBoost: 1.15 });
@@ -516,10 +696,10 @@ export class Cabin {
   }
 
   private addCoachWheels(root: THREE.Group): void {
-    const tyreMaterial = createRetroMaterial({ color: 0x101113, snap: 0.45, ambientBoost: 0.8 });
-    const rimMaterial = createRetroMaterial({ color: 0x8d918e, snap: 0.18, ambientBoost: 1.2 });
-    const hubMaterial = createRetroMaterial({ color: 0x363a3b, snap: 0.16, ambientBoost: 1.1 });
-    const flapMaterial = createRetroMaterial({ color: 0x121314, snap: 0.3 });
+    const tyreMaterial = createPBRMaterial({ surface: 'rubber', color: 0x101113 });
+    const rimMaterial = createPBRMaterial({ surface: 'metal', color: 0x8d918e, roughness: 0.34 });
+    const hubMaterial = createPBRMaterial({ surface: 'metal', color: 0x363a3b, roughness: 0.5 });
+    const flapMaterial = createPBRMaterial({ surface: 'rubber', color: 0x121314 });
 
     for (const z of [-3.72, 3.72]) {
       for (const side of [-1, 1]) {

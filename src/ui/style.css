@@ -245,6 +245,10 @@ html, body {
 .menu-language { display: flex; gap: 7px; margin-top: 1.4em; }
 .menu-language button { border: 1px solid #554a39; background: rgba(3, 4, 7, .45); color: #8f8578; padding: .42em .9em; font: inherit; font-size: 11px; letter-spacing: .15em; cursor: pointer; }
 .menu-language button.active, .menu-language button:hover, .menu-language button:focus-visible { border-color: var(--amber-dim); color: var(--amber); outline: 0; }
+.menu-quality { display: flex; align-items: center; gap: 7px; margin-top: .75em; }
+.menu-quality span { min-width: 76px; color: #8f8578; font-size: 9px; letter-spacing: .15em; }
+.menu-quality button { border: 1px solid #554a39; background: rgba(3, 4, 7, .45); color: #8f8578; padding: .42em .65em; font: inherit; font-size: 9px; letter-spacing: .1em; cursor: pointer; }
+.menu-quality button.active, .menu-quality button:hover, .menu-quality button:focus-visible { border-color: var(--amber-dim); color: var(--amber); outline: 0; }
 .menu-atmosphere {
   position: absolute;
   right: clamp(28px, 8vw, 140px);

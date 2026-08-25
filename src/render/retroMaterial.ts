@@ -106,6 +106,8 @@ const FRAG = /* glsl */ `
   uniform float uAmbientBoost;
   uniform float uEmissive;
   uniform float uCabin;
+  uniform float uRoughness;
+  uniform float uMetalness;
 
   #ifdef USE_MAP
     uniform sampler2D uMap;
@@ -143,7 +145,9 @@ const FRAG = /* glsl */ `
     float cone = smoothstep(uHeadCone.y, uHeadCone.x, dot(-L, uHeadDir));
     float atten = clamp(1.0 - dist / uHeadRange, 0.0, 1.0);
     vec3 H = normalize(L + V);
-    return pow(max(0.0, dot(N, H)), 28.0) * cone * atten * atten;
+    float glossPower = mix(96.0, 7.0, uRoughness);
+    float energy = mix(1.25, 0.22, uRoughness);
+    return pow(max(0.0, dot(N, H)), glossPower) * energy * cone * atten * atten;
   }
 
   vec3 torchlight(vec3 N) {
@@ -184,6 +188,7 @@ const FRAG = /* glsl */ `
       float rut = smoothstep(0.55, 0.0, abs(au - 1.6));
       albedo *= 1.0 - rut * 0.16;
 
+
       // Tar repairs and hairline cracks break up the otherwise perfectly clean ribbon.
       // They are procedural in route space, so they remain fixed to the road while moving.
       float cell = hash21(floor(vec2(v * 0.115, u * 0.42)));
@@ -221,6 +226,7 @@ const FRAG = /* glsl */ `
       albedo = mix(albedo, vec3(0.62, 0.52, 0.13) * wear, centre);
       albedo = mix(albedo, vec3(0.60, 0.58, 0.54) * wear, edge);
       roadReflect = (centre * 0.34 + edge * 0.26) * wear;
+
     #endif
 
     #ifdef EMISSIVE
@@ -232,13 +238,15 @@ const FRAG = /* glsl */ `
       light += headlight(uHeadR, N);
       light += torchlight(N);
       light += uCabinLight * uCabin;
-      vec3 lit = albedo * light;
+      vec3 diffuseAlbedo = albedo * (1.0 - uMetalness * 0.72);
+      vec3 lit = diffuseAlbedo * light;
       // Small, deliberately quantised highlights give windscreens, paint, wet asphalt and
       // chrome a sense of material without replacing the hand-authored retro lighting.
       float moonRim = pow(1.0 - max(0.0, dot(N, V)), 3.0) * max(0.0, dot(N, uMoonDir));
       float beamSpec = headlightSpecular(uHeadL, N, V) + headlightSpecular(uHeadR, N, V);
-      lit += uMoonColor * moonRim * 0.12;
-      lit += uHeadColor * beamSpec * uHeadIntensity * 0.085;
+      vec3 f0 = mix(vec3(0.04), albedo, uMetalness);
+      lit += mix(uMoonColor, f0, uMetalness) * moonRim * mix(0.16, 0.04, uRoughness);
+      lit += uHeadColor * f0 * beamSpec * uHeadIntensity * 0.32;
       #ifdef ROAD_MARKINGS
         // Retroreflective paint returns a small warm flash directly to the driver.
         float beamFacing = smoothstep(0.10, 0.92, 1.0 - abs(vPosView.x) / max(1.0, -vPosView.z));
@@ -268,6 +276,9 @@ export interface RetroOptions {
   /** Multiplier on global fog density. 0 keeps cabin surfaces out of the fog. */
   fogScale?: number;
   ambientBoost?: number;
+  /** PBR-compatible surface controls used by the hybrid retro shader. */
+  roughness?: number;
+  metalness?: number;
   /** Only used by mode 'emissive'. */
   emissive?: number;
   /** How much warm bounce light from the headlights this surface receives. */
@@ -308,6 +319,8 @@ export function createRetroMaterial(opts: RetroOptions = {}): THREE.ShaderMateri
       uAmbientBoost: { value: opts.ambientBoost ?? 1 },
       uEmissive: { value: opts.emissive ?? 1 },
       uCabin: { value: opts.cabin ?? 0 },
+      uRoughness: { value: opts.roughness ?? 0.72 },
+      uMetalness: { value: opts.metalness ?? 0 },
       uMap: { value: opts.map ?? null },
     },
   });

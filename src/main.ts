@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 
 import { Renderer } from './render/renderer';
+import { LightingRig } from './render/lighting';
 import { shared, updateHeadlights, updateMoon, updateTorch } from './render/retroMaterial';
 import { Loop } from './core/loop';
 import { Input } from './core/input';
@@ -21,6 +22,7 @@ import { Traffic } from './world/traffic';
 import { StoryStops, STORY_MILES, STORY_STOPS } from './world/stops';
 import { Sky } from './world/sky';
 import { DistantLandscape, HeadlightDust } from './world/atmosphere';
+import { RoadsideLights } from './world/roadsideLights';
 import { FloatingOrigin } from './world/origin';
 import { Bus } from './bus/drive';
 import { Cabin, EYE_LOCAL, LEFT_MIRROR_MOUNT, MIRROR_MOUNT } from './bus/interior';
@@ -68,6 +70,8 @@ const canvas = document.getElementById('view') as HTMLCanvasElement;
 const renderer = new Renderer(canvas);
 
 const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x04050a, 0.0085);
+const lighting = new LightingRig(scene);
 const camera = new THREE.PerspectiveCamera(58, renderer.aspect, 0.12, 2000);
 // the driver sees the world and everything marked "cabin only"; the mirror sees neither
 camera.layers.enable(LAYER_DIRECT_ONLY);
@@ -98,6 +102,8 @@ scene.add(landscape.group);
 
 const dust = new HeadlightDust(seed);
 scene.add(dust.points);
+const roadsideLights = new RoadsideLights(path);
+scene.add(roadsideLights.group);
 
 const bus = new Bus(path, seed, START_STATION);
 
@@ -475,7 +481,9 @@ const headR = new THREE.Vector3();
 const headDir = new THREE.Vector3();
 const torchPosition = new THREE.Vector3();
 const torchDirection = new THREE.Vector3(0, 0, -1);
+const cabinLightPosition = new THREE.Vector3();
 const collisionProbe = new THREE.Vector3();
+const downwardLookOffset = new THREE.Vector3();
 const headEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 const headQuat = new THREE.Quaternion();
 
@@ -502,7 +510,7 @@ function placeCamera(dt: number): void {
 
   const mouse = input.consumeMouse();
   mouseYaw = THREE.MathUtils.clamp(mouseYaw - mouse.x * 0.0022, -1.32, 1.32);
-  mousePitch = THREE.MathUtils.clamp(mousePitch - mouse.y * 0.0019, -0.62, 0.48);
+  mousePitch = THREE.MathUtils.clamp(mousePitch - mouse.y * 0.0019, -0.45, 0.48);
 
   const wanted = input.isDown('lookRight') ? 1 : 0;
   lookX += (wanted - lookX) * Math.min(1, dt * 7);
@@ -523,6 +531,13 @@ function placeCamera(dt: number): void {
   const freePitch = THREE.MathUtils.lerp(mousePitch, leftMirrorLook.pitch, leftMirrorGlance);
   const yaw = THREE.MathUtils.lerp(freeYaw, mirrorLook.yaw, glance);
   const pitch = THREE.MathUtils.lerp(freePitch, mirrorLook.pitch, glance);
+  // Looking into the footwell is not a pure neck rotation: the driver naturally lifts
+  // and draws the head back. This keeps close cab panels out of the near field, where
+  // their low-poly edges otherwise expand into giant black zigzags across the screen.
+  const downwardLook = THREE.MathUtils.clamp(-pitch / 0.45, 0, 1);
+  downwardLookOffset.set(0, downwardLook * 0.56, downwardLook * 0.72);
+  downwardLookOffset.applyQuaternion(cabin.group.quaternion);
+  camera.position.add(downwardLookOffset);
   headEuler.set(pitch, yaw, 0, 'YXZ');
   headQuat.setFromEuler(headEuler);
   camera.quaternion.copy(cabin.group.quaternion).multiply(headQuat);
@@ -550,6 +565,14 @@ const mainMenu = new MainMenu({
     saveSettings();
     mainMenu.refresh();
     journal.refresh(story);
+  },
+  setGraphicsQuality: (quality) => {
+    renderer.applyGraphicsQuality(quality);
+    lighting.applyQuality();
+    saveSettings();
+    camera.aspect = renderer.aspect;
+    camera.updateProjectionMatrix();
+    mainMenu.refresh();
   },
   showMenuMusic: () => menuMusic.play(),
   hideMenuMusic: () => menuMusic.stop(),
@@ -947,11 +970,12 @@ const loop = new Loop((dt, elapsed) => {
   sky.setDawn(Math.pow(clock.nightProgress, 2.5));
   landscape.update(camera);
   dust.update(bus, elapsed);
+  roadsideLights.update(bus.distance);
 
   // the saloon is lit by four tired domes, plus whatever passes the other way
   const glare = traffic.glareAt(bus.distance);
-  setCabinGlow(2.7 + glare * 2.7, 1 + glare * 0.35);
-  cabin.setCabinLights(1.35);
+  setCabinGlow(2.05 + glare * 1.65, 0.72 + glare * 0.12);
+  cabin.setCabinLights(0.64);
   // the glass picks up dust and breath as the night goes on, so it never reads as a feed
   cabin.mirror.setCondition(0.1 + clock.nightProgress * 0.12);
   cabin.mirror.setBrightness(2.1);
@@ -968,10 +992,14 @@ const loop = new Loop((dt, elapsed) => {
 
   roster.update(elapsed, -bus.yawRate * bus.speed * 0.02);
   cabin.dashboard.update({
+    dt,
     speedMph: bus.speedMph,
+    signedSpeed: bus.speed,
     rpm: bus.rpm,
     wheelAngle: bus.wheelAngle,
     gear: bus.gear,
+    forwardPressed: input.isDown('throttle'),
+    reversePressed: input.isDown('brake'),
     miles: bus.miles,
     clock: clock.format(),
     highBeam: bus.highBeam,
@@ -984,6 +1012,17 @@ const loop = new Loop((dt, elapsed) => {
   shared.uHeadRange.value = bus.highBeam ? 165 : 105;
   shared.uHeadCone.value.set(bus.highBeam ? 0.992 : 0.985, bus.highBeam ? 0.9 : 0.8);
   shared.uHeadIntensity.value = bus.highBeam ? 3.2 : 2.75;
+  bus.localToWorld(-0.55, 2.35, 4.75, cabinLightPosition);
+  lighting.update(
+    bus.position,
+    cabinLightPosition,
+    headL,
+    headR,
+    bus.forwardVector,
+    sky.moonDirection,
+    bus.highBeam,
+  );
+  renderer.requestShadowUpdate();
 
   const torchOn = interactions.onFoot && interactions.flashlightOn;
   if (torchOn) {
@@ -1037,6 +1076,8 @@ const loop = new Loop((dt, elapsed) => {
     rebase: origin.rebases,
     ghost: ghostStage,
     seed: seed.toString(16),
+    quality: settings.graphicsQuality,
+    res: renderer.resolution,
   });
 
   renderer.present(scene, camera, elapsed);
