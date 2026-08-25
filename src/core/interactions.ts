@@ -22,6 +22,7 @@ export class Interactions {
   private readonly direction = new THREE.Vector3();
   private readonly up = new THREE.Vector3(0, 1, 0);
   private lookYaw = 0;
+  private lookPitch = 0;
   private activeStop: StopSpec | null = null;
 
   constructor(
@@ -45,16 +46,26 @@ export class Interactions {
     }
 
     const forward = this.direction.set(Math.sin(this.lookYaw), 0, Math.cos(this.lookYaw));
-    const right = new THREE.Vector3(forward.z, 0, -forward.x);
+    // Camera looks along +direction, so its screen-right vector is direction x up.
+    // The old inverse cross product made A move right and D move left.
+    const right = new THREE.Vector3(-forward.z, 0, forward.x);
     const move = new THREE.Vector3();
     move.addScaledVector(forward, input.axis('brake', 'throttle'));
     move.addScaledVector(right, input.axis('left', 'right'));
-    if (move.lengthSq() > 0) this.position.addScaledVector(move.normalize(), dt * 2.8);
+    const walkSpeed = input.isDown('sprint') ? 5.0 : 2.8;
+    if (move.lengthSq() > 0) this.position.addScaledVector(move.normalize(), dt * walkSpeed);
 
-    // The zone is a circle centred on the door; it is a safety boundary, not an invisible maze.
+    // The zone is a generous circle centred on the door. The old 13 m radius could be
+    // reached before some scenery had been inspected and felt like movement had broken.
     const door = bus.localToWorld(2.05, 0, -4.7);
     const delta = this.position.clone().sub(door).setY(0);
-    if (delta.length() > 13) this.position.copy(door).addScaledVector(delta.normalize(), 13);
+    if (delta.length() > 28) this.position.copy(door).addScaledVector(delta.normalize(), 28);
+
+    // Follow the actual procedural surface under the player, including shoulder slope and
+    // desert undulation. Binding Y to the parked bus worked only near the door and caused
+    // the camera to sink into raised terrain farther into the field.
+    const standingEyeY = bus.groundHeightAt(this.position) + 1.68;
+    this.position.y += (standingEyeY - this.position.y) * Math.min(1, dt * 18);
 
     const atDoor = this.position.distanceTo(door.setY(this.position.y)) < 2.1;
     const inspect = this.stops.inspectableNear(this.position);
@@ -81,8 +92,16 @@ export class Interactions {
   placeCamera(camera: THREE.PerspectiveCamera, input: Input, dt: number): void {
     const turn = input.axis('lookLeft', 'lookRight');
     this.lookYaw -= turn * 1.65 * dt;
+    const mouse = input.consumeMouse();
+    this.lookYaw -= mouse.x * 0.0022;
+    this.lookPitch = THREE.MathUtils.clamp(this.lookPitch - mouse.y * 0.0019, -1.05, 1.05);
     camera.position.copy(this.position);
-    this.direction.set(Math.sin(this.lookYaw), 0, Math.cos(this.lookYaw));
+    const horizontal = Math.cos(this.lookPitch);
+    this.direction.set(
+      Math.sin(this.lookYaw) * horizontal,
+      Math.sin(this.lookPitch),
+      Math.cos(this.lookYaw) * horizontal,
+    );
     camera.up.copy(this.up);
     camera.lookAt(this.position.clone().add(this.direction));
     camera.updateMatrixWorld();
@@ -98,6 +117,7 @@ export class Interactions {
     const door = bus.localToWorld(2.3, 0.05, -4.7);
     this.position.copy(door).add(new THREE.Vector3(0, 1.68, 0));
     this.lookYaw = bus.heading;
+    this.lookPitch = 0;
     bus.speed = 0;
     this.story.flag(`visited:${stop.id}`);
     this.story.checkpoint({ kind: 'stop', stopId: stop.id });

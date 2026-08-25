@@ -13,8 +13,8 @@ export interface Line {
 
 export const STRINGS: Record<string, Line> = {
   'boot.note': {
-    en: 'W / S  drive and brake     A / D  steer     E  interact\nSPACE  rear-view mirror     J  journal     R  radio\nP  autopilot if you need time to look',
-    ru: 'W / S  газ, тормоз и задний ход     A / D  руль     E  взаимодействие\nSPACE  салонное зеркало     J  журнал     R  радио\nP  автопилот, если нужно осмотреться',
+    en: 'W / S  drive and brake     A / D  steer     E  interact\nMOUSE  look     LEFT SHIFT  sprint on foot     SPACE  mirror\nCLICK  capture mouse     ESC  menu',
+    ru: 'W / S  газ, тормоз и задний ход     A / D  руль     E  взаимодействие\nМЫШЬ  обзор     ЛЕВЫЙ SHIFT  бег снаружи     SPACE  зеркало\nКЛИК  захватить мышь     ESC  меню',
   },
   'boot.context': { en: 'WESTERN TRAILS  /  ROUTE 17  /  OCTOBER 1991', ru: 'WESTERN TRAILS  /  МАРШРУТ 17  /  ОКТЯБРЬ 1991' },
   'boot.brief': {
@@ -22,6 +22,10 @@ export const STRINGS: Record<string, Line> = {
     ru: 'Лас-Пальмас → Карсон. Одна ночная смена.\nДержи автобус на дороге. Считай пассажиров.',
   },
   'boot.start': { en: 'START SHIFT', ru: 'НАЧАТЬ СМЕНУ' },
+  'pause.title': { en: 'SHIFT PAUSED', ru: 'СМЕНА ПРИОСТАНОВЛЕНА' },
+  'pause.continue': { en: 'CONTINUE SHIFT', ru: 'ПРОДОЛЖИТЬ СМЕНУ' },
+  'pause.restart': { en: 'RESTART FROM DEPOT', ru: 'НАЧАТЬ ЗАНОВО' },
+  'pause.restartHint': { en: 'Restarting erases the current shift save.', ru: 'Перезапуск удалит сохранение текущей смены.' },
 
   'hud.mile': { en: 'MILE', ru: 'МИЛЯ' },
   'hud.route': { en: 'RTE 17', ru: 'МАРШРУТ 17' },

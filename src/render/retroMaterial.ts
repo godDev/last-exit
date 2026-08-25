@@ -123,9 +123,20 @@ const FRAG = /* glsl */ `
     return uHeadColor * cone * atten * diff * uHeadIntensity;
   }
 
+  float headlightSpecular(vec3 origin, vec3 N, vec3 V) {
+    vec3 toLight = origin - vPosView;
+    float dist = length(toLight);
+    vec3 L = toLight / max(dist, 0.001);
+    float cone = smoothstep(uHeadCone.y, uHeadCone.x, dot(-L, uHeadDir));
+    float atten = clamp(1.0 - dist / uHeadRange, 0.0, 1.0);
+    vec3 H = normalize(L + V);
+    return pow(max(0.0, dot(N, H)), 28.0) * cone * atten * atten;
+  }
+
   void main() {
     vec3 N = normalize(vNormalView);
     if (!gl_FrontFacing) N = -N;
+    vec3 V = normalize(-vPosView);
 
     vec3 albedo = uColor * vTint;
     float alpha = uOpacity;
@@ -160,6 +171,21 @@ const FRAG = /* glsl */ `
       float pebble = step(0.84, hash21(floor(vec2(u * 4.6, v * 3.7))));
       albedo += vec3(0.055, 0.047, 0.034) * shoulder * pebble;
 
+      // Desert floor: several scales of fixed route-space detail prevent the wide field
+      // from reading as one flat brown polygon. Broad dry washes sit beneath small stone
+      // clusters and pale mineral patches, all stable as the floating origin moves.
+      float field = smoothstep(7.5, 12.0, au);
+      float soil = hash21(floor(vec2(u * 0.18, v * 0.15)));
+      float fineSoil = hash21(floor(vec2(u * 1.15, v * 0.9)));
+      albedo *= 1.0 + field * ((soil - 0.5) * 0.20 + (fineSoil - 0.5) * 0.075);
+      float washWave = abs(sin(v * 0.035 + u * 0.082 + sin(v * 0.011) * 2.4));
+      float wash = field * smoothstep(0.72, 0.96, washWave) * step(0.58, soil);
+      albedo = mix(albedo, albedo * vec3(0.72, 0.68, 0.62), wash * 0.42);
+      float mineral = field * step(0.965, hash21(floor(vec2(u * 0.42, v * 0.38))));
+      albedo += vec3(0.07, 0.055, 0.035) * mineral;
+      float fieldStone = field * step(0.982, hash21(floor(vec2(u * 2.8, v * 2.2))));
+      albedo += vec3(0.10, 0.075, 0.045) * fieldStone;
+
       // dashed yellow centre line: 3 m stripe every 12 m
       float dash = step(mod(v, 12.0), 3.0);
       float centre = step(au, 0.09) * dash;
@@ -181,6 +207,12 @@ const FRAG = /* glsl */ `
       light += headlight(uHeadR, N);
       light += uCabinLight * uCabin;
       vec3 lit = albedo * light;
+      // Small, deliberately quantised highlights give windscreens, paint, wet asphalt and
+      // chrome a sense of material without replacing the hand-authored retro lighting.
+      float moonRim = pow(1.0 - max(0.0, dot(N, V)), 3.0) * max(0.0, dot(N, uMoonDir));
+      float beamSpec = headlightSpecular(uHeadL, N, V) + headlightSpecular(uHeadR, N, V);
+      lit += uMoonColor * moonRim * 0.12;
+      lit += uHeadColor * beamSpec * uHeadIntensity * 0.085;
       #ifdef ROAD_MARKINGS
         // Retroreflective paint returns a small warm flash directly to the driver.
         float beamFacing = smoothstep(0.10, 0.92, 1.0 - abs(vPosView.x) / max(1.0, -vPosView.z));
@@ -190,7 +222,10 @@ const FRAG = /* glsl */ `
 
     // exp2 fog straight to night. Draw distance is an art decision here, not a budget one.
     float dist = length(vPosView);
-    float f = 1.0 - exp(-pow(dist * uFogDensity * uFogScale, 2.0));
+    // Slightly denser near the road surface: this separates foreground props from the
+    // horizon and makes headlight range feel volumetric without a separate fog pass.
+    float groundFog = 1.0 + smoothstep(4.5, -1.5, vPosView.y) * 0.16;
+    float f = 1.0 - exp(-pow(dist * uFogDensity * uFogScale * groundFog, 2.0));
     lit = mix(lit, uFogColor, clamp(f, 0.0, 1.0));
 
     gl_FragColor = vec4(lit, alpha);

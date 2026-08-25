@@ -32,6 +32,7 @@ import { Hud } from './ui/hud';
 import { Journal } from './ui/journal';
 import { Choices } from './ui/choices';
 import { EndingScreen } from './ui/ending';
+import { PauseMenu } from './ui/pause';
 import { DebugPanel } from './ui/debug';
 import { t, subtitle } from './content/i18n';
 import { PASSENGERS } from './content/passengers';
@@ -103,7 +104,7 @@ passengerDirector.restore();
 const origin = new FloatingOrigin(4000);
 origin.add(path, bus, props, storyStops);
 
-const input = new Input(window, import.meta.env.DEV);
+const input = new Input(window, import.meta.env.DEV, canvas);
 const clock = new GameClock();
 if (savedShift) clock.minutes = savedShift.minutes;
 const hud = new Hud();
@@ -125,6 +126,19 @@ let heldAtStoryStop = false;
 let paused = false;
 let autosaveElapsed = 0;
 let scriptedStop: StoryStopId | null = null;
+
+function setPaused(value: boolean): void {
+  paused = value;
+  if (value) {
+    if (document.pointerLockElement) document.exitPointerLock();
+    pauseMenu.show();
+  } else {
+    pauseMenu.hide();
+    hud.clear();
+  }
+}
+
+const pauseMenu = new PauseMenu(() => setPaused(false), restartShift);
 
 function persistShift(): void {
   story.autosave(bus.miles, clock.minutes);
@@ -363,8 +377,11 @@ function resolveChoice(): void {
 
 // --- head --------------------------------------------------------------------
 let lookX = 0;
+let mouseYaw = 0;
+let mousePitch = 0;
 let glance = 0;          // 0 = eyes on the road, 1 = looking into the mirror
 let leftMirrorGlance = 0;
+let leftMirrorLatched = false;
 const REST_FOV = 58;
 const MIRROR_FOV = 38;
 
@@ -431,10 +448,17 @@ function placeCamera(dt: number): void {
     return;
   }
 
+  const mouse = input.consumeMouse();
+  mouseYaw = THREE.MathUtils.clamp(mouseYaw - mouse.x * 0.0022, -1.32, 1.32);
+  mousePitch = THREE.MathUtils.clamp(mousePitch - mouse.y * 0.0019, -0.62, 0.48);
+
   const wanted = input.isDown('lookRight') ? 1 : 0;
   lookX += (wanted - lookX) * Math.min(1, dt * 7);
 
-  const wantLeftMirror = input.isDown('lookLeft') ? 1 : 0;
+  // Q works both as a held glance and as a toggle. Previously a normal quick key press
+  // could begin and end between rendered frames, leaving the mirror hidden throughout.
+  if (input.wasTapped('lookLeft')) leftMirrorLatched = !leftMirrorLatched;
+  const wantLeftMirror = input.isDown('lookLeft') || leftMirrorLatched ? 1 : 0;
   leftMirrorGlance += (wantLeftMirror - leftMirrorGlance) * Math.min(1, dt * 9);
 
   const wantGlance = input.isDown('lookMirror') ? 1 : 0;
@@ -443,8 +467,8 @@ function placeCamera(dt: number): void {
   camera.position.copy(cabin.eye(eye, bus.heave));
 
   // a glance to the right is a negative yaw, because +Y rotation turns the view left
-  const freeYaw = THREE.MathUtils.lerp(-lookX * 0.85, leftMirrorLook.yaw, leftMirrorGlance);
-  const freePitch = THREE.MathUtils.lerp(0, leftMirrorLook.pitch, leftMirrorGlance);
+  const freeYaw = THREE.MathUtils.lerp(mouseYaw - lookX * 0.85, leftMirrorLook.yaw, leftMirrorGlance);
+  const freePitch = THREE.MathUtils.lerp(mousePitch, leftMirrorLook.pitch, leftMirrorGlance);
   const yaw = THREE.MathUtils.lerp(freeYaw, mirrorLook.yaw, glance);
   const pitch = THREE.MathUtils.lerp(freePitch, mirrorLook.pitch, glance);
   headEuler.set(pitch, yaw, 0, 'YXZ');
@@ -770,9 +794,7 @@ input.on('pause', () => {
     journal.close();
     return;
   }
-  paused = !paused;
-  if (paused) hud.say(null, settings.lang === 'ru' ? 'ПАУЗА' : 'PAUSED', null, 9999);
-  else hud.clear();
+  setPaused(!paused);
 });
 
 // --- frame -------------------------------------------------------------------
@@ -835,7 +857,9 @@ const loop = new Loop((dt, elapsed) => {
 
   cabin.sync(bus.position, bus.heading, bus.pitch, bus.roll);
   // The physical side mirror should never drift into the forward view as a black block.
-  cabin.leftMirror.mesh.visible = input.isDown('lookLeft');
+  // Keep the housing alive for the whole eased camera move, not merely while the physical
+  // key is down. This also prevents a black/pop frame when Q is released.
+  cabin.leftMirror.mesh.visible = leftMirrorGlance > 0.01 || input.isDown('lookLeft') || leftMirrorLatched;
   if (choices.active || endingScreen.visible) hud.prompt(null);
   else interactions.update(dt, bus, input);
   placeCamera(dt);
@@ -853,7 +877,7 @@ const loop = new Loop((dt, elapsed) => {
   cabin.mirror.setBrightness(2.1);
   // The driver's exterior glass sees the unlit road behind the coach, so it needs a
   // deliberate low-light lift rather than pretending rear headlights exist.
-  cabin.leftMirror.setBrightness(4.2);
+  cabin.leftMirror.setBrightness(3.6);
 
   if (radio) {
     radio.tune(input.axis('radioDown', 'radioUp'), dt);

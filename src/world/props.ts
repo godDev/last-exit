@@ -19,7 +19,7 @@ import { METRES_PER_MILE } from '../core/units';
 export const PROP_BEHIND = 4;
 export const PROP_AHEAD = 16;
 
-type Kind = 'pole' | 'delineator' | 'fence' | 'scrub' | 'mile' | 'sign';
+type Kind = 'pole' | 'delineator' | 'fence' | 'scrub' | 'scatter' | 'mile' | 'sign';
 
 interface Slot {
   kind: Kind;
@@ -167,6 +167,53 @@ function buildJoshua(): THREE.BufferGeometry {
   return merge(parts, 'joshua');
 }
 
+function buildAgave(): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  for (let i = 0; i < 11; i++) {
+    const angle = (i / 11) * Math.PI * 2;
+    const blade = tint(new THREE.ConeGeometry(0.14, 1.15 + (i % 3) * 0.12, 4), i % 2 ? 0x26301d : 0x303923);
+    blade.rotateZ(Math.PI * (0.25 + (i % 2) * 0.035));
+    blade.rotateY(angle);
+    blade.translate(Math.cos(angle) * 0.28, 0.38, Math.sin(angle) * 0.28);
+    parts.push(blade);
+  }
+  return merge(parts, 'agave');
+}
+
+/** A whole patch of foreground detail in one draw call. */
+function buildStoneScatter(variant: number): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  for (let i = 0; i < 9; i++) {
+    const angle = i * 2.399 + variant * 0.7;
+    const radius = 0.5 + (i % 4) * 0.62;
+    const size = 0.12 + ((i * 7 + variant) % 5) * 0.055;
+    const stone = tint(new THREE.DodecahedronGeometry(size, 0), i % 3 === 0 ? 0x544331 : 0x403426);
+    stone.scale(1.2 + (i % 2) * 0.5, 0.55 + (i % 3) * 0.16, 0.9);
+    stone.rotateY(angle * 1.7);
+    stone.translate(Math.cos(angle) * radius, size * 0.42, Math.sin(angle) * radius);
+    parts.push(stone);
+  }
+  // Dry grass clumps add fine silhouettes between the stones.
+  for (let i = 0; i < 7; i++) {
+    const angle = i * 2.17 + variant;
+    const x = Math.cos(angle) * (0.7 + (i % 3) * 0.55);
+    const z = Math.sin(angle) * (0.7 + (i % 3) * 0.55);
+    for (let bladeIndex = -1; bladeIndex <= 1; bladeIndex++) {
+      const blade = tint(new THREE.ConeGeometry(0.025, 0.38 + (i % 2) * 0.16, 3), 0x5b512c);
+      blade.rotateZ(bladeIndex * 0.22);
+      blade.translate(x + bladeIndex * 0.06, 0.2, z);
+      parts.push(blade);
+    }
+  }
+  if (variant === 2) {
+    const branch = tint(new THREE.CylinderGeometry(0.035, 0.055, 2.2, 5), 0x302419);
+    branch.rotateZ(Math.PI / 2.35);
+    branch.translate(0.2, 0.22, 0.1);
+    parts.push(branch);
+  }
+  return merge(parts, `stone scatter ${variant}`);
+}
+
 // --- the field ---------------------------------------------------------------
 
 export class PropField {
@@ -174,6 +221,7 @@ export class PropField {
   private readonly slots = new Map<Kind, Slot[]>();
   private readonly active = new Map<string, Slot>();
   private readonly scrubVariants: THREE.BufferGeometry[];
+  private readonly scatterVariants: THREE.BufferGeometry[];
   private lastFirst = Number.NaN;
   private readonly collisionNormal = new THREE.Vector3();
 
@@ -188,7 +236,8 @@ export class PropField {
     const vegetation = createRetroMaterial({ vertexColors: true, snap: 0.85 });
     const timber = createRetroMaterial({ vertexColors: true, snap: 0.85 });
 
-    this.scrubVariants = [buildSaguaro(), buildBush(), buildJoshua(), buildBush()];
+    this.scrubVariants = [buildSaguaro(), buildBush(), buildJoshua(), buildAgave(), buildBush()];
+    this.scatterVariants = [buildStoneScatter(0), buildStoneScatter(1), buildStoneScatter(2)];
 
     // one geometry per kind, shared by every instance of it
     const pole = buildPole();
@@ -199,6 +248,7 @@ export class PropField {
     this.pool('delineator', 46, () => new THREE.Mesh(delineator, timber));
     this.pool('fence', 16, () => new THREE.Mesh(fence, timber));
     this.pool('scrub', 44, () => new THREE.Mesh(this.scrubVariants[0], vegetation));
+    this.pool('scatter', 72, () => new THREE.Mesh(this.scatterVariants[0], vegetation));
     this.pool('mile', 3, () => this.buildPlate(0.42, 0.84, 1.25));
     this.pool('sign', 4, () => this.buildPlate(1.5, 1.05, 2.2));
   }
@@ -304,6 +354,11 @@ export class PropField {
       for (let s = 0; s < 3; s++) {
         if (hash1(i * 31 + s, this.seed + 700) > 0.52) wanted.add(`scrub|${i}|${s}`);
       }
+      // Low field detail is denser than landmark vegetation, but each entry is a merged
+      // patch of stones and grass rather than dozens of individual draw calls.
+      for (let s = 0; s < 4; s++) {
+        if (hash1(i * 43 + s, this.seed + 1700) > 0.27) wanted.add(`scatter|${i}|${s}`);
+      }
 
       // mile markers, wherever a whole mile falls inside this station
       const d0 = i * STATION_SPACING;
@@ -408,6 +463,20 @@ export class PropField {
         const scale = 0.7 + hash1(index * 3 + sub, this.seed + 21) * 0.7;
         slot.object.scale.setScalar(scale);
         slot.object.rotation.y = hash1(index + sub, this.seed + 5) * Math.PI * 2;
+        return ok;
+      }
+
+      case 'scatter': {
+        const mesh = slot.object as THREE.Mesh;
+        const pick = hash1(index * 113 + sub, this.seed + 812);
+        mesh.geometry = this.scatterVariants[Math.floor(pick * this.scatterVariants.length)];
+        const side = hash1(index * 19 + sub, this.seed + 831) > 0.5 ? 1 : -1;
+        const lateral = side * (8.5 + hash1(index * 29 + sub, this.seed + 844) * 68);
+        const along = hash1(index * 37 + sub, this.seed + 855) * STATION_SPACING;
+        const ok = this.place(slot.object, index, lateral, along, 'along');
+        const scale = 0.72 + hash1(index * 17 + sub, this.seed + 866) * 0.85;
+        slot.object.scale.setScalar(scale);
+        slot.object.rotation.y = hash1(index * 23 + sub, this.seed + 877) * Math.PI * 2;
         return ok;
       }
 

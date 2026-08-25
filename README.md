@@ -49,6 +49,8 @@ npm run build
 |---|---|
 | `W` / `S` | throttle / brake; hold `S` after stopping to reverse |
 | `A` / `D` | steer |
+| `Mouse` | look around in the cabin and on foot; click to capture, `ESC` to release |
+| `Left Shift` | sprint while exploring on foot |
 | `SPACE` | glance at the cabin mirror (hold) |
 | `Q` | look at the left side mirror |
 | `X` | look right around the cab |

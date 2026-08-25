@@ -55,7 +55,9 @@ export class Renderer {
     this.gl.setSize(w, h, false);
 
     this.height = settings.renderHeight;
-    this.width = Math.min(1440, Math.round((this.height * w) / h / 2) * 2);
+    // Keep the internal target at the window aspect. The old 1440 cap squeezed a 900p
+    // target on 16:9 displays and the fullscreen pass stretched it back out.
+    this.width = Math.min(1920, Math.round((this.height * w) / h / 2) * 2);
     this.target.setSize(this.width, this.height);
     this.post.setSource(this.target.texture, this.width, this.height);
     shared.uSnapRes.value.set(this.width * 0.86, this.height * 0.86);
@@ -71,7 +73,8 @@ export class Renderer {
   present(scene: THREE.Scene, camera: THREE.Camera, elapsed: number): void {
     shared.uTime.value = elapsed;
     this.post.time = elapsed;
-    this.post.retro = settings.retro * 0.72;
+    // Preserve the tape mood without letting chroma bleed and vertex damage erase faces.
+    this.post.retro = settings.retro * 0.5;
 
     this.gl.setRenderTarget(this.target);
     this.gl.clear();

@@ -95,10 +95,15 @@ const FRAG = /* glsl */ `
     // --- tape transport -----------------------------------------------------
     // A slow head-switching band plus rare whole-frame slip.
     float band = fract(uv.y * 1.7 - uTime * 0.06);
-    float bandMask = smoothstep(0.985, 1.0, band) * (0.35 + uGlitch);
+    float bandMask = smoothstep(0.975, 1.0, band) * (0.42 + uGlitch);
     float slip = step(0.9982, hash12(vec2(floor(uTime * 12.0), 3.0))) * (0.4 + uGlitch);
     float lineNoise = (hash12(vec2(floor(uv.y * uSourceRes.y), floor(uTime * 24.0))) - 0.5);
     uv.x += lineNoise * (0.0016 * uRetro + bandMask * 0.012 + slip * 0.03);
+
+    // Slow vertical tracking error and a thin switching line near the bottom of frame.
+    float trackingPos = fract(uTime * 0.047);
+    float tracking = exp(-abs(uv.y - trackingPos) * 190.0);
+    uv.x += sin(uv.y * 210.0 + uTime * 7.0) * tracking * 0.009 * uRetro;
 
     uv = clamp(uv, vec2(0.0005), vec2(0.9995));
 
@@ -108,6 +113,24 @@ const FRAG = /* glsl */ `
     col.r = texture2D(tDiffuse, uv + vec2(ca, 0.0)).r;
     col.g = texture2D(tDiffuse, uv).g;
     col.b = texture2D(tDiffuse, uv - vec2(ca, 0.0)).b;
+
+    // Recover edge definition lost to the low-resolution target before applying tape
+    // damage. This makes instruments, faces and vehicle panel lines clearer while broad
+    // VHS colour bleed remains visible around them.
+    vec2 sharpPx = 1.0 / uSourceRes;
+    vec3 neighbourhood =
+      texture2D(tDiffuse, uv + vec2(sharpPx.x, 0.0)).rgb +
+      texture2D(tDiffuse, uv - vec2(sharpPx.x, 0.0)).rgb +
+      texture2D(tDiffuse, uv + vec2(0.0, sharpPx.y)).rgb +
+      texture2D(tDiffuse, uv - vec2(0.0, sharpPx.y)).rgb;
+    vec3 sharpened = col * 1.44 - neighbourhood * 0.11;
+    col = mix(col, max(vec3(0.0), sharpened), 0.42);
+
+    // Magnetic tape retains a faint delayed copy of high-contrast edges. Restrict the
+    // ghost to a narrow horizontal offset so faces and vehicle silhouettes stay legible.
+    vec3 delayed = texture2D(tDiffuse, uv - vec2(0.0055 + uGlitch * 0.008, 0.0)).rgb;
+    float ghostEdge = max(0.0, lastExitLuma(delayed) - lastExitLuma(col));
+    col += delayed * ghostEdge * (0.12 + 0.14 * uRetro);
 
     // Optical spill around the moon, headlamps, signs and dashboard bulbs.
     col += bloom(uv) * mix(0.12, 0.34, uRetro);
@@ -145,6 +168,12 @@ const FRAG = /* glsl */ `
     // luminance noise: film grain and tape hiss are the same gesture here
     float grain = hash12(pixel + fract(uTime) * 913.0) - 0.5;
     col += grain * (0.013 + uGlitch * 0.09) * uRetro;
+
+    // Short-lived white RF scratches, sparse enough not to obscure authored detail.
+    float rfLine = step(0.992, hash12(vec2(floor(pixel.y), floor(uTime * 18.0))));
+    float rfGrain = hash12(vec2(floor(pixel.x * 0.35), floor(uTime * 30.0)));
+    col += vec3(rfGrain) * rfLine * 0.075 * uRetro;
+    col += vec3(0.055, 0.07, 0.09) * tracking * uRetro;
 
     // --- the display itself -------------------------------------------------
     float scan = 1.0 - 0.055 * uRetro * step(0.5, fract(pixel.y * 0.5));

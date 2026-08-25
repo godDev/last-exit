@@ -33,6 +33,30 @@ export class DistantLandscape {
     }
     mesas.frustumCulled = false;
     this.group.add(mesas);
+
+    // A nearer belt of broken foothills gives the field parallax and separates it from
+    // the distant mesas. Instancing keeps the extra depth to one draw call.
+    const foothillGeo = new THREE.DodecahedronGeometry(1, 0);
+    const foothillMat = createRetroMaterial({
+      color: 0x352b24,
+      fogScale: 0.32,
+      ambientBoost: 2.8,
+      snap: 0.24,
+    });
+    const foothills = new THREE.InstancedMesh(foothillGeo, foothillMat, 38);
+    for (let i = 0; i < 38; i++) {
+      const angle = (i / 38) * Math.PI * 2 + (rand() - 0.5) * 0.22;
+      const radius = 185 + rand() * 175;
+      const height = 5 + rand() * 18;
+      const width = 12 + rand() * 34;
+      dummy.position.set(Math.sin(angle) * radius, -3 + height * 0.28, Math.cos(angle) * radius);
+      dummy.scale.set(width, height, width * (0.6 + rand() * 0.7));
+      dummy.rotation.set((rand() - 0.5) * 0.18, rand() * Math.PI, (rand() - 0.5) * 0.12);
+      dummy.updateMatrix();
+      foothills.setMatrixAt(i, dummy.matrix);
+    }
+    foothills.frustumCulled = false;
+    this.group.add(foothills);
   }
 
   update(camera: THREE.Camera): void {

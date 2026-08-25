@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Input } from '../core/input';
 import type { RoutePath } from '../world/curvature';
-import { STATION_SPACING } from '../world/curvature';
+import { STATION_SPACING, terrainAt } from '../world/curvature';
 import { fbm1 } from '../core/rng';
 import { METRES_PER_MILE, MPH_PER_MS } from '../core/units';
 
@@ -15,9 +15,11 @@ export { METRES_PER_MILE } from '../core/units';
 
 const LENGTH = 12.2;
 const MAX_SPEED = 29.5;         // ~66 mph
-const MAX_REVERSE_SPEED = 6.2;  // ~14 mph, governed coach reverse gear
+const MAX_REVERSE_SPEED = 7.0;  // ~16 mph, still safely governed
 const ACCEL = 1.15;             // m/s^2, loaded diesel
-const REVERSE_ACCEL = 0.82;
+// A short coach reverse gear multiplies torque strongly. Keep it below forward launch
+// acceleration on asphalt, but high enough to back out of sand without hovering at zero.
+const REVERSE_ACCEL = 1.08;
 const BRAKE = 4.2;
 const ENGINE_BRAKE = 0.35;
 const DRAG = 0.00055;
@@ -164,10 +166,15 @@ export class Bus {
         accel += forwardPedal ? ACCEL * grip : 0;
         accel -= reversePedal ? BRAKE : 0;
       } else if (this.speed < -0.08) {
-        accel -= reversePedal ? REVERSE_ACCEL * grip : 0;
+        // Reverse gear provides extra low-speed torque on loose surfaces. This is capped
+        // by the surface speed limit below, so it improves extraction rather than making
+        // high-speed reversing effective.
+        const reverseGrip = this.surface === 'desert' ? 0.72 : this.surface === 'shoulder' ? 0.9 : 1;
+        accel -= reversePedal ? REVERSE_ACCEL * reverseGrip : 0;
         accel += forwardPedal ? BRAKE : 0;
       } else if (reversePedal && !forwardPedal) {
-        accel = -REVERSE_ACCEL * grip;
+        const reverseGrip = this.surface === 'desert' ? 0.72 : this.surface === 'shoulder' ? 0.9 : 1;
+        accel = -REVERSE_ACCEL * reverseGrip;
       } else if (forwardPedal && !reversePedal) {
         accel = ACCEL * grip;
       }
@@ -187,7 +194,14 @@ export class Bus {
     }
     accel -= Math.sign(this.speed) * DRAG * this.speed * this.speed;
     if (this.surface !== 'asphalt' && Math.abs(this.speed) > 0.01) {
-      accel -= Math.sign(this.speed) * (this.surface === 'desert' ? 0.95 : 0.45);
+      // Loose ground must make the loaded coach feel slow and heavy, but resistance must
+      // remain below the tractive effort available at full throttle. The previous desert
+      // value (0.95) exceeded ACCEL * grip (about 0.63), so the bus always decelerated to
+      // zero and appeared to stall. Fade resistance in at walking speed so it can also
+      // pull away cleanly after stopping in the field.
+      const rollingResistance = this.surface === 'desert' ? 0.38 : 0.18;
+      const rollingSpeed = Math.min(1, Math.abs(this.speed) / 1.5);
+      accel -= Math.sign(this.speed) * rollingResistance * rollingSpeed;
     }
 
     const previousSpeed = this.speed;
@@ -370,6 +384,31 @@ export class Bus {
 
   get forwardVector(): THREE.Vector3 { this.updateFrame(); return this.forward; }
   get rightVector(): THREE.Vector3 { this.updateFrame(); return this.right; }
+
+  /** Approximate the procedural road/field surface beneath an arbitrary nearby point. */
+  groundHeightAt(position: THREE.Vector3): number {
+    this.updateFrame();
+    const fromBusX = position.x - this.position.x;
+    const fromBusZ = position.z - this.position.z;
+    const along = fromBusX * this.forward.x + fromBusZ * this.forward.z;
+    const sampleDistance = this.distance + along;
+    const frame = this.path.sample(sampleDistance);
+    const routeRightX = -Math.cos(frame.heading);
+    const routeRightZ = Math.sin(frame.heading);
+    const dx = position.x - frame.pos.x;
+    const dz = position.z - frame.pos.z;
+    const lateral = dx * routeRightX + dz * routeRightZ;
+    const a = Math.abs(lateral);
+
+    let graded = 0;
+    if (a <= 3.65) graded = 0.08 * (1 - a / 3.65);
+    else if (a <= 4.4) graded = THREE.MathUtils.lerp(0, -0.07, (a - 3.65) / 0.75);
+    else if (a <= 7.2) graded = THREE.MathUtils.lerp(-0.07, -0.34, (a - 4.4) / 2.8);
+    else if (a <= 13) graded = THREE.MathUtils.lerp(-0.34, -0.55, (a - 7.2) / 5.8);
+    else graded = -0.55 - Math.min(0.45, (a - 13) * 0.008);
+
+    return frame.pos.y + graded + terrainAt(Math.floor(sampleDistance / STATION_SPACING), lateral, this.seed);
+  }
 
   get headlightLeft(): THREE.Vector3 { return this.localToWorld(-1.02, 0.95, LENGTH * 0.5); }
   get headlightRight(): THREE.Vector3 { return this.localToWorld(1.02, 0.95, LENGTH * 0.5); }

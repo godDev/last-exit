@@ -165,7 +165,7 @@ export class Sky {
 
     // --- moon ---------------------------------------------------------------
     const moonMat = new THREE.MeshBasicMaterial({
-      color: 0xc9d0e4,
+      color: 0xd2d6e2,
       depthWrite: false,
       depthTest: false,
       toneMapped: false,
@@ -175,6 +175,29 @@ export class Sky {
     this.moon.renderOrder = -998;
     this.moon.frustumCulled = false;
     this.group.add(this.moon);
+
+    // Low-contrast maria and craters keep the moon from reading as a flat UI circle. The
+    // markings are separate geometry so they retain the deliberately coarse silhouette.
+    const lunarDark = new THREE.MeshBasicMaterial({
+      color: 0x838b9e,
+      transparent: true,
+      opacity: 0.34,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false,
+    });
+    const craterSpecs: Array<[number, number, number, number]> = [
+      [-7.5, 5.5, 5.8, 3.9], [8.2, 1.5, 4.2, 5.1], [-2.0, -7.2, 3.1, 2.6],
+      [5.8, 9.0, 2.4, 1.8], [-10.5, -4.0, 2.1, 3.0],
+    ];
+    for (const [x, y, sx, sy] of craterSpecs) {
+      const crater = new THREE.Mesh(new THREE.CircleGeometry(1, 10), lunarDark);
+      crater.position.set(x, y, 0.02);
+      crater.scale.set(sx, sy, 1);
+      crater.renderOrder = -997;
+      crater.frustumCulled = false;
+      this.moon.add(crater);
+    }
 
     const halo = new THREE.Mesh(
       new THREE.CircleGeometry(72, 28),

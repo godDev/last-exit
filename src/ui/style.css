@@ -141,6 +141,15 @@ html, body {
 .ending-box button { margin-top: 1.9em; padding: .85em 1.2em; background: transparent; border: 1px solid var(--amber-dim); color: var(--amber); font: inherit; letter-spacing: .14em; cursor: pointer; }
 .ending-box button:focus-visible { background: rgba(255,179,71,.16); border-color: var(--amber); outline: 0; }
 
+.pause-menu { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: auto; background: rgba(0, 0, 0, .68); backdrop-filter: blur(2px); }
+.pause-box { width: min(430px, 86vw); padding: 30px; text-align: center; background: rgba(8, 7, 5, .96); border: 1px solid var(--amber-dim); box-shadow: 0 18px 70px #000; }
+.pause-kicker { color: #785028; font-size: .68em; letter-spacing: .24em; }
+.pause-box h2 { margin: .6em 0 1.1em; color: var(--amber); font-size: 1.45em; font-weight: 400; letter-spacing: .18em; }
+.pause-box button { display: block; width: 100%; margin-top: 10px; padding: .85em 1.2em; background: rgba(255,179,71,.05); border: 1px solid var(--amber-dim); color: var(--paper); font: inherit; letter-spacing: .1em; cursor: pointer; }
+.pause-box button:hover, .pause-box button:focus-visible { background: rgba(255,179,71,.16); border-color: var(--amber); outline: 0; }
+.pause-box button.danger { color: #d28c70; border-color: rgba(180, 78, 48, .48); }
+.pause-box small { display: block; margin-top: 14px; color: #766958; line-height: 1.45; }
+
 /* ---------- debug ---------- */
 .debug {
   position: absolute;

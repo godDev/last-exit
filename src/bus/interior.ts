@@ -200,6 +200,7 @@ export class Cabin {
   private readonly domeLights: THREE.Mesh[] = [];
   private readonly mirrorTarget = new THREE.Vector3();
   private readonly leftMirrorTarget = new THREE.Vector3();
+  private readonly leftMirrorCamera = new THREE.Vector3();
 
   constructor() {
     const surfaces = createRetroMaterial({
@@ -241,7 +242,9 @@ export class Cabin {
     );
     this.group.add(this.mirror.mesh);
 
-    this.leftMirror = new Mirror();
+    // Keep the proven wide render surface. The previous portrait render target produced
+    // a black sampled texture on the exterior glass on some WebGL implementations.
+    this.leftMirror = new Mirror({ exterior: true });
     this.leftMirror.mesh.position.copy(LEFT_MIRROR_MOUNT);
     this.leftMirror.mesh.quaternion.setFromUnitVectors(
       new THREE.Vector3(0, 0, 1),
@@ -272,9 +275,16 @@ export class Cabin {
 
   /** Aim the exterior glass down the left side of the coach and behind it, never through the cabin. */
   aimLeftMirror(): THREE.Vector3 {
-    this.leftMirrorTarget.set(-3.0, FLOOR_Y + 0.9, 7.4);
+    // Keep the sightline just outside the body and let it meet the road behind. The old
+    // short, strongly outward aim landed entirely in the unlit desert, which looked like
+    // an empty black texture at the beginning of the shift.
+    this.leftMirrorTarget.set(-1.62, FLOOR_Y + 0.5, 20);
     this.group.localToWorld(this.leftMirrorTarget);
-    this.leftMirror.aim(this.group, this.leftMirrorTarget);
+    // The optical viewpoint sits slightly outside the housing. Keeping it at the glass
+    // put the near half of its narrow portrait FOV into the opaque coach side panel.
+    this.leftMirrorCamera.set(-2.02, 2.22, -5.35);
+    this.group.localToWorld(this.leftMirrorCamera);
+    this.leftMirror.aim(this.group, this.leftMirrorTarget, this.leftMirrorCamera);
     return this.leftMirror.worldPosition;
   }
 

@@ -34,6 +34,8 @@ const GLASS_HEIGHT = GLASS_WIDTH * (RT_HEIGHT / RT_WIDTH);
 export interface MirrorOptions {
   /** Exterior coach mirrors are tall and narrow; the saloon glass remains wide. */
   side?: boolean;
+  /** Render the road behind with exterior-mirror exposure and no saloon camera inset. */
+  exterior?: boolean;
 }
 
 export class Mirror {
@@ -42,6 +44,11 @@ export class Mirror {
   /** Public so tooling can read the glass back without a screenshot. */
   readonly target: THREE.WebGLRenderTarget;
   private readonly glass: THREE.Mesh;
+  private readonly exterior: boolean;
+  private readonly worldUp = new THREE.Vector3();
+  private readonly cabinRotation = new THREE.Quaternion();
+  private readonly savedAmbient = new THREE.Color();
+  private readonly savedMoonColor = new THREE.Color();
   /** Rendered every other frame; the mirror does not need 60 Hz. */
   private parity = 0;
   /** World position of the glass, for the "lean in and look" camera move. */
@@ -49,6 +56,7 @@ export class Mirror {
 
   constructor(options: MirrorOptions = {}) {
     const side = options.side ?? false;
+    this.exterior = options.exterior ?? side;
     const targetWidth = side ? 112 : RT_WIDTH;
     const targetHeight = side ? 176 : RT_HEIGHT;
     const glassWidth = side ? 0.24 : GLASS_WIDTH;
@@ -98,10 +106,18 @@ export class Mirror {
    * Aim the mirror camera down the aisle. Called once per frame with the cabin transform,
    * since the bus is moving through the world rather than sitting at the origin.
    */
-  aim(cabin: THREE.Object3D, target: THREE.Vector3): void {
+  aim(cabin: THREE.Object3D, target: THREE.Vector3, virtualOrigin?: THREE.Vector3): void {
     this.mesh.getWorldPosition(this.worldPosition);
-    this.camera.position.copy(this.worldPosition);
-    this.camera.up.copy(cabin.up);
+    this.camera.position.copy(virtualOrigin ?? this.worldPosition);
+    // The saloon mirror is a virtual reflection camera. Putting its near plane exactly
+    // on the physical glass leaves it behind the driver's seat/front trim at the start
+    // of a shift, producing a black target. Move it a little into the aisle while keeping
+    // the visible mirror housing in its original place. Exterior mirrors must remain at
+    // their physical mounts, so they deliberately receive no inset.
+    if (!this.exterior) this.camera.position.lerp(target, 0.075);
+    cabin.getWorldQuaternion(this.cabinRotation);
+    this.worldUp.set(0, 1, 0).applyQuaternion(this.cabinRotation);
+    this.camera.up.copy(this.worldUp);
     this.camera.lookAt(target);
     this.camera.updateMatrixWorld();
   }
@@ -123,11 +139,27 @@ export class Mirror {
     updateHeadlights(this.camera, lights.left, lights.right, lights.direction);
     updateMoon(this.camera, moon);
 
+    // The road behind the coach receives no headlight contribution. A real mirror and the
+    // driver's dark-adapted eyes still retain moonlit detail, so give only the exterior
+    // mirror render a modest exposure lift. Restore the shared uniforms immediately: the
+    // main view must keep its authored night levels.
+    if (this.exterior) {
+      this.savedAmbient.copy(shared.uAmbient.value);
+      this.savedMoonColor.copy(shared.uMoonColor.value);
+      shared.uAmbient.value.multiplyScalar(2.5);
+      shared.uMoonColor.value.multiplyScalar(1.7);
+    }
+
     const previous = gl.getRenderTarget();
     gl.setRenderTarget(this.target);
     gl.clear();
     gl.render(scene, this.camera);
     gl.setRenderTarget(previous);
+
+    if (this.exterior) {
+      shared.uAmbient.value.copy(this.savedAmbient);
+      shared.uMoonColor.value.copy(this.savedMoonColor);
+    }
   }
 
   /** Grime and a slight tint, so the glass never looks like a clean video feed. */

@@ -3,6 +3,7 @@
 export type Action =
   | 'throttle' | 'brake' | 'left' | 'right'
   | 'interact'
+  | 'sprint'
   | 'lookMirror' | 'lookLeft' | 'lookRight'
   | 'radioPower' | 'radioUp' | 'radioDown' | 'radioSeek'
   | 'highBeam' | 'horn' | 'wipers'
@@ -18,6 +19,7 @@ const HELD: Record<string, Action> = {
   Space: 'lookMirror',
   KeyQ: 'lookLeft',
   KeyX: 'lookRight',
+  ShiftLeft: 'sprint', ShiftRight: 'sprint',
   BracketLeft: 'radioDown',
   BracketRight: 'radioUp',
 };
@@ -30,6 +32,7 @@ const TAPPED: Record<string, Action> = {
   ArrowUp: 'choicePrevious',
   Enter: 'choiceConfirm',
   KeyE: 'interact',
+  KeyQ: 'lookLeft',
   KeyR: 'radioPower',
   KeyT: 'radioSeek',
   KeyH: 'highBeam',
@@ -59,8 +62,14 @@ export class Input {
   private held = new Set<Action>();
   private tapped = new Set<Action>();
   private listeners = new Map<Action, Array<() => void>>();
+  private mouseDX = 0;
+  private mouseDY = 0;
 
-  constructor(target: Window = window, private readonly developerTools = false) {
+  constructor(
+    target: Window = window,
+    private readonly developerTools = false,
+    pointerElement?: HTMLElement,
+  ) {
     target.addEventListener('keydown', (e) => {
       const h = HELD[e.code];
       if (h) { this.held.add(h); e.preventDefault(); }
@@ -76,9 +85,28 @@ export class Input {
       if (h) this.held.delete(h);
     });
     target.addEventListener('blur', () => this.held.clear());
+
+    if (pointerElement) {
+      pointerElement.addEventListener('click', () => {
+        if (document.pointerLockElement !== pointerElement) void pointerElement.requestPointerLock();
+      });
+      target.addEventListener('mousemove', (event) => {
+        if (document.pointerLockElement !== pointerElement) return;
+        this.mouseDX += Math.max(-180, Math.min(180, event.movementX));
+        this.mouseDY += Math.max(-180, Math.min(180, event.movementY));
+      });
+    }
   }
 
   isDown(a: Action): boolean { return this.held.has(a); }
+
+  /** Relative pointer motion accumulated since the previous rendered frame. */
+  consumeMouse(): { x: number; y: number } {
+    const delta = { x: this.mouseDX, y: this.mouseDY };
+    this.mouseDX = 0;
+    this.mouseDY = 0;
+    return delta;
+  }
 
   /** True once per press. Call endFrame() after all consumers have polled. */
   wasTapped(a: Action): boolean { return this.tapped.has(a); }

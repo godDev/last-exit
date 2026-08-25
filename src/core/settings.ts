@@ -21,7 +21,7 @@ const DEFAULTS: Settings = {
   retro: 1,
   // Still deliberately low-resolution, but with enough detail for the dashboard,
   // road furniture and distant silhouettes to read on modern displays.
-  renderHeight: 480,
+  renderHeight: 810,
   showDebug: false,
 };
 
@@ -32,8 +32,8 @@ function load(): Settings {
     const raw = localStorage.getItem(KEY);
     if (!raw) return { ...DEFAULTS };
     const loaded = { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Settings>) };
-    // Migrate the old 270/360p prototype setting to the new detailed renderer.
-    loaded.renderHeight = Math.max(480, loaded.renderHeight);
+    // Migrate old low-resolution saves so faces and dashboard detail remain legible.
+    loaded.renderHeight = Math.max(810, loaded.renderHeight);
     return loaded;
   } catch {
     return { ...DEFAULTS };

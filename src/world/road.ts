@@ -19,8 +19,11 @@ interface CrossPoint {
 
 const CROSS: CrossPoint[] = [
   { u: -300, dy: -1.3, color: 0x151309 },
+  { u: -200, dy: -1.15, color: 0x19160d },
   { u: -110, dy: -1.0, color: 0x1f1a12 },
+  { u: -70, dy: -0.9, color: 0x241e15 },
   { u: -34, dy: -0.75, color: 0x2a2318 },
+  { u: -22, dy: -0.64, color: 0x30271b },
   { u: -13, dy: -0.55, color: 0x342b1e },
   { u: -7.2, dy: -0.34, color: 0x3b3124 },
   { u: -4.4, dy: -0.07, color: 0x4a3f2e },
@@ -32,8 +35,11 @@ const CROSS: CrossPoint[] = [
   { u: 4.4, dy: -0.07, color: 0x4a3f2e },
   { u: 7.2, dy: -0.34, color: 0x3b3124 },
   { u: 13, dy: -0.55, color: 0x342b1e },
+  { u: 22, dy: -0.64, color: 0x30271b },
   { u: 34, dy: -0.75, color: 0x2a2318 },
+  { u: 70, dy: -0.9, color: 0x241e15 },
   { u: 110, dy: -1.0, color: 0x1f1a12 },
+  { u: 200, dy: -1.15, color: 0x19160d },
   { u: 300, dy: -1.3, color: 0x151309 },
 ];
 
