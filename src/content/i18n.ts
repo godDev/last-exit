@@ -22,10 +22,44 @@ export const STRINGS: Record<string, Line> = {
     ru: 'Лас-Пальмас → Карсон. Одна ночная смена.\nДержи автобус на дороге. Считай пассажиров.',
   },
   'boot.start': { en: 'START SHIFT', ru: 'НАЧАТЬ СМЕНУ' },
+  'menu.aria': { en: 'Main menu', ru: 'Главное меню' },
+  'menu.brief': { en: 'THE LAST ROUTE LEAVES AT 22:30.', ru: 'ПОСЛЕДНИЙ РЕЙС ОТПРАВЛЯЕТСЯ В 22:30.' },
+  'menu.continue': { en: 'CONTINUE SHIFT', ru: 'ПРОДОЛЖИТЬ СМЕНУ' },
+  'menu.resumeAt': { en: 'AUTOSAVE', ru: 'АВТОСОХРАНЕНИЕ' },
+  'menu.noSave': { en: 'NO ACTIVE SHIFT', ru: 'НЕТ АКТИВНОЙ СМЕНЫ' },
+  'menu.mile': { en: 'MILE', ru: 'МИЛЯ' },
+  'menu.newShift': { en: 'NEW SHIFT', ru: 'НОВАЯ СМЕНА' },
+  'menu.newShiftDetail': { en: 'Start at Las Palmas depot.', ru: 'Начать у депо в Лас-Пальмас.' },
+  'menu.checkpoints': { en: 'SELECT CHECKPOINT', ru: 'ВЫБРАТЬ ЧЕКПОИНТ' },
+  'menu.checkpointsDetail': { en: 'Begin from an authored route act.', ru: 'Начать с выбранного акта маршрута.' },
+  'menu.checkpointHeading': { en: 'ROUTE CHECKPOINTS', ru: 'ЧЕКПОИНТЫ МАРШРУТА' },
+  'menu.checkpoint.depot': { en: 'LAS PALMAS DEPOT', ru: 'ДЕПО ЛАС-ПАЛМАС' },
+  'menu.checkpoint.depotDetail': { en: '22:30 · Departure', ru: '22:30 · Отправление' },
+  'menu.checkpoint.mile86': { en: 'MILE 86', ru: '86-Я МИЛЯ' },
+  'menu.checkpoint.mile86Detail': { en: '23:45 · The lit bus stop', ru: '23:45 · Остановка с включённым светом' },
+  'menu.checkpoint.closedGas': { en: 'CLOSED SERVICE STATION', ru: 'ЗАКРЫТАЯ СЕРВИСНАЯ СТАНЦИЯ' },
+  'menu.checkpoint.closedGasDetail': { en: '01:43 · A man beside a sedan', ru: '01:43 · Мужчина у седана' },
+  'menu.checkpoint.millers': { en: 'MILLER’S GAS', ru: 'MILLER’S GAS' },
+  'menu.checkpoint.millersDetail': { en: '02:26 · The station is still open', ru: '02:26 · Станция всё ещё открыта' },
+  'menu.checkpoint.patrol': { en: 'HIGHWAY PATROL', ru: 'ДОРОЖНАЯ ПОЛИЦИЯ' },
+  'menu.checkpoint.patrolDetail': { en: '03:15 · Documents, please', ru: '03:15 · Предъявите документы' },
+  'menu.checkpoint.motel': { en: 'SUNSET MOTOR INN', ru: 'SUNSET MOTOR INN' },
+  'menu.checkpoint.motelDetail': { en: '04:05 · Rooms 7 and 8', ru: '04:05 · Номера 7 и 8' },
+  'menu.checkpoint.final': { en: 'LAST STOP', ru: 'ПОСЛЕДНЯЯ ОСТАНОВКА' },
+  'menu.checkpoint.finalDetail': { en: '05:00 · Thirty miles to Carson', ru: '05:00 · Тридцать миль до Карсона' },
+  'menu.language': { en: 'Language', ru: 'Язык' },
+  'menu.atmosphereLabel': { en: 'NIGHT SERVICE', ru: 'НОЧНОЙ РЕЙС' },
+  'menu.atmosphere': {
+    en: 'October, 1991.\nA night route through the desert.\nThe passengers remember a trip you do not.',
+    ru: 'Октябрь 1991-го.\nНочной рейс через пустыню.\nПассажиры помнят поездку, которой ты не помнишь.',
+  },
+  'menu.controls': { en: 'CLICK TO CAPTURE MOUSE  /  ESC TO RETURN HERE', ru: 'КЛИКНИ ДЛЯ ЗАХВАТА МЫШИ  /  ESC — ВЕРНУТЬСЯ СЮДА' },
   'pause.title': { en: 'SHIFT PAUSED', ru: 'СМЕНА ПРИОСТАНОВЛЕНА' },
   'pause.continue': { en: 'CONTINUE SHIFT', ru: 'ПРОДОЛЖИТЬ СМЕНУ' },
-  'pause.restart': { en: 'RESTART FROM DEPOT', ru: 'НАЧАТЬ ЗАНОВО' },
-  'pause.restartHint': { en: 'Restarting erases the current shift save.', ru: 'Перезапуск удалит сохранение текущей смены.' },
+  'pause.menu': { en: 'RETURN TO MAIN MENU', ru: 'В ГЛАВНОЕ МЕНЮ' },
+  'pause.menuHint': { en: 'Returning to the menu saves this shift automatically.', ru: 'При выходе в меню смена сохраняется автоматически.' },
+  'pause.restart': { en: 'RESTART CHECKPOINT', ru: 'НАЧАТЬ С ЧЕКПОИНТА' },
+  'pause.restartHint': { en: 'Restarting returns to the current route checkpoint.', ru: 'Перезапуск вернёт к текущему чекпоинту маршрута.' },
 
   'hud.mile': { en: 'MILE', ru: 'МИЛЯ' },
   'hud.route': { en: 'RTE 17', ru: 'МАРШРУТ 17' },
@@ -40,6 +74,8 @@ export const STRINGS: Record<string, Line> = {
   'who.dispatch': { en: 'DISPATCH', ru: 'ДИСПЕТЧЕР' },
   'who.radio': { en: 'RADIO', ru: 'РАДИО' },
   'who.driver': { en: 'YOU', ru: 'ТЫ' },
+  'flashlight.on': { en: 'FLASHLIGHT ON', ru: 'ФОНАРЬ ВКЛЮЧЁН' },
+  'flashlight.off': { en: 'FLASHLIGHT OFF', ru: 'ФОНАРЬ ВЫКЛЮЧЕН' },
 
   'choice.navigate': { en: '↑ ↓ select  ·  ENTER confirm  ·  1–3 quick choice', ru: '↑ ↓ выбор  ·  ENTER подтвердить  ·  1–3 быстрый выбор' },
   'choice.mile86.title': { en: 'A girl looks through the door glass. “Please. I need to get to Carson.” The Route 17 timetable behind her is dated October 14, 1986.', ru: 'Девушка смотрит в стекло двери: «Пожалуйста. Мне нужно в Карсон». За её спиной расписание Route 17 от 14 октября 1986 года.' },
@@ -141,13 +177,13 @@ export function t(key: string): string {
   return settings.lang === 'ru' ? line.ru : line.en;
 }
 
-/** The English original plus, when the player reads Russian, the translation under it. */
+/** UI language is exclusive: Russian mode should not duplicate every line in English. */
 export function subtitle(key: string): { primary: string; secondary: string | null } {
   const line = STRINGS[key];
   if (!line) return { primary: key, secondary: null };
   if (settings.lang === 'en') return { primary: line.en, secondary: null };
   return {
     primary: line.ru,
-    secondary: settings.dualSubtitles ? line.en : null,
+    secondary: null,
   };
 }

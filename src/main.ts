@@ -1,13 +1,14 @@
 import * as THREE from 'three';
 
 import { Renderer } from './render/renderer';
-import { shared, updateHeadlights, updateMoon } from './render/retroMaterial';
+import { shared, updateHeadlights, updateMoon, updateTorch } from './render/retroMaterial';
 import { Loop } from './core/loop';
 import { Input } from './core/input';
 import { GameClock } from './core/clock';
 import { EventScheduler } from './core/events';
 import type { RouteState } from './core/events';
 import { Interactions } from './core/interactions';
+import { MENU_CHECKPOINTS, makeCheckpointSave, type MenuCheckpointId } from './core/checkpoints';
 import { Story, type StoryChoiceScene, type StoryEnding, type StoryStopId } from './core/story';
 import { PassengerDirector } from './story/passengerDirector';
 import { SEED_ROUTE, mulberry32 } from './core/rng';
@@ -27,11 +28,13 @@ import { Roster } from './bus/passengers';
 import { LAYER_DIRECT_ONLY, setCabinGlow } from './bus/mirror';
 import { AudioSystem } from './audio/context';
 import { EngineAudio } from './audio/engine';
+import { MenuMusic } from './audio/menuMusic';
 import { Radio } from './audio/radio';
 import { Hud } from './ui/hud';
 import { Journal } from './ui/journal';
 import { Choices } from './ui/choices';
 import { EndingScreen } from './ui/ending';
+import { MainMenu } from './ui/mainMenu';
 import { PauseMenu } from './ui/pause';
 import { DebugPanel } from './ui/debug';
 import { t, subtitle } from './content/i18n';
@@ -39,6 +42,19 @@ import { PASSENGERS } from './content/passengers';
 
 /** Everything reachable from the console while tuning. Filled in as systems come up. */
 const dev: Record<string, unknown> = {};
+const FRESH_SHIFT_KEY = 'last-exit.route17.start-fresh.v1';
+const RESTART_CHECKPOINT_KEY = 'last-exit.route17.restart-checkpoint.v1';
+type AutoStartMode = 'new' | 'checkpoint';
+const autoStartMode = (() => {
+  try {
+    const requested = sessionStorage.getItem(FRESH_SHIFT_KEY);
+    sessionStorage.removeItem(FRESH_SHIFT_KEY);
+    // "1" was written by the first menu implementation. Treat it as a checkpoint so an
+    // already selected scene never replays the departure narration after this update.
+    if (requested === 'new') return 'new' as const;
+    return requested ? 'checkpoint' as const : null;
+  } catch { return null; }
+})();
 let savedShift = Story.load();
 // Builds before the compressed pacing stored route positions such as Mile 86. They cannot
 // be mapped faithfully into the short playable route, so begin a clean shift instead.
@@ -113,9 +129,28 @@ const journal = new Journal();
 const choices = new Choices();
 let discardSaveOnUnload = false;
 function restartShift(): void {
+  loadCheckpoint(currentRestartCheckpoint(), 'checkpoint');
+}
+function startNewShift(): void {
+  loadCheckpoint('depot', 'new');
+}
+function loadCheckpoint(id: MenuCheckpointId, startMode: AutoStartMode = 'checkpoint'): void {
+  const save = makeCheckpointSave(id);
   discardSaveOnUnload = true;
-  Story.clearSave();
+  new Story(save.story).autosave(save.mile, save.minutes);
+  rememberRestartCheckpoint(id);
+  try { sessionStorage.setItem(FRESH_SHIFT_KEY, startMode); } catch { /* the saved checkpoint remains available from Continue */ }
   window.location.reload();
+}
+function rememberRestartCheckpoint(id: MenuCheckpointId): void {
+  try { localStorage.setItem(RESTART_CHECKPOINT_KEY, id); } catch { /* storage is optional */ }
+}
+function currentRestartCheckpoint(): MenuCheckpointId {
+  try {
+    const saved = localStorage.getItem(RESTART_CHECKPOINT_KEY);
+    if (MENU_CHECKPOINTS.some((checkpoint) => checkpoint.id === saved)) return saved as MenuCheckpointId;
+  } catch { /* start from the depot when storage is unavailable */ }
+  return 'depot';
 }
 const endingScreen = new EndingScreen(restartShift);
 
@@ -138,7 +173,19 @@ function setPaused(value: boolean): void {
   }
 }
 
-const pauseMenu = new PauseMenu(() => setPaused(false), restartShift);
+function returnToMainMenu(): void {
+  persistShift();
+  void audio?.suspend();
+  paused = false;
+  journal.close();
+  pauseMenu.hide();
+  if (document.pointerLockElement) document.exitPointerLock();
+  started = false;
+  savedShift = Story.load();
+  mainMenu.show(savedShift);
+}
+
+const pauseMenu = new PauseMenu(() => setPaused(false), restartShift, returnToMainMenu);
 
 function persistShift(): void {
   story.autosave(bus.miles, clock.minutes);
@@ -168,6 +215,7 @@ function parkAtStoryStop(stopId: StoryStopId): void {
  */
 function beginScriptedStop(stopId: StoryStopId): void {
   scriptedStop = stopId;
+  rememberRestartCheckpoint(stopId);
   story.checkpoint({ kind: 'stop', stopId });
 }
 
@@ -207,6 +255,7 @@ function choiceSceneForStop(stopId: StoryStopId): ChoiceScene | null {
 
 const interactions = new Interactions(storyStops, story, hud, (stop) => {
   heldAtStoryStop = false;
+  cabin.setDoorOpen(true);
   const acts = {
     'mile86': 'mile86',
     'closed-gas': 'gas',
@@ -218,6 +267,7 @@ const interactions = new Interactions(storyStops, story, hud, (stop) => {
   story.setAct(acts[stop.id]);
   persistShift();
 }, (stop) => {
+  cabin.setDoorOpen(false);
   if (stop.id === 'millers-gas' && story.has('inspected:millers.receipt') && !story.has('miller.returned')) {
     const nora = roster.find('nora-vale');
     const noraWasMirror = nora?.where === 'mirror';
@@ -423,6 +473,8 @@ const eye = new THREE.Vector3();
 const headL = new THREE.Vector3();
 const headR = new THREE.Vector3();
 const headDir = new THREE.Vector3();
+const torchPosition = new THREE.Vector3();
+const torchDirection = new THREE.Vector3(0, 0, -1);
 const collisionProbe = new THREE.Vector3();
 const headEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 const headQuat = new THREE.Quaternion();
@@ -485,27 +537,25 @@ function placeCamera(dt: number): void {
 }
 
 // --- boot --------------------------------------------------------------------
-const boot = document.getElementById('boot')!;
 let started = false;
+let shiftInitialized = false;
+const menuMusic = new MenuMusic();
 
-function refreshBootText(): void {
-  boot.querySelectorAll<HTMLElement>('[data-i18n]').forEach((element) => {
-    const key = element.dataset.i18n;
-    if (key) element.textContent = t(key);
-  });
-  boot.querySelectorAll<HTMLElement>('.lang-btn').forEach((b) => {
-    b.classList.toggle('active', b.dataset.lang === settings.lang);
-  });
-}
-refreshBootText();
-
-boot.querySelectorAll<HTMLElement>('.lang-btn').forEach((b) => {
-  b.addEventListener('click', () => {
-    settings.lang = b.dataset.lang === 'ru' ? 'ru' : 'en';
+const mainMenu = new MainMenu({
+  continueShift: () => { void startShift(); },
+  newShift: startNewShift,
+  selectCheckpoint: loadCheckpoint,
+  setLanguage: (lang) => {
+    settings.lang = lang;
     saveSettings();
-    refreshBootText();
-  });
+    mainMenu.refresh();
+    journal.refresh(story);
+  },
+  showMenuMusic: () => menuMusic.play(),
+  hideMenuMusic: () => menuMusic.stop(),
+  retryMenuMusic: () => menuMusic.retryAfterGesture(),
 });
+mainMenu.show(savedShift);
 
 // --- sound -------------------------------------------------------------------
 // Built on the first click, because no browser will start an AudioContext before one.
@@ -531,40 +581,57 @@ function storyRadio(key: string): void {
   hud.say(t('who.radio'), line.primary, line.secondary, seconds);
 }
 
-async function startShift(): Promise<void> {
-  if (started) return;
-  started = true;
-  boot.classList.add('gone');
-
+/** Re-entering a saved shift resumes the same audio graph instead of layering a second bus on top. */
+async function ensureAudio(): Promise<void> {
   try {
     audio = await AudioSystem.start();
-    engineAudio = new EngineAudio(audio);
-    radio = new Radio(audio, (stationId, key, seconds) => {
-      const station = radio?.stations.find((s) => s.id === stationId);
-      const line = subtitle(key);
-      hud.say(station?.callsign ?? t('who.radio'), line.primary, line.secondary, seconds);
-    });
+    if (!engineAudio) {
+      engineAudio = new EngineAudio(audio);
+    }
+    if (!radio) {
+      radio = new Radio(audio, (stationId, key, seconds) => {
+        const station = radio?.stations.find((s) => s.id === stationId);
+        const line = subtitle(key);
+        hud.say(station?.callsign ?? t('who.radio'), line.primary, line.secondary, seconds);
+      });
+    }
     Object.assign(dev, { audio, radio, engineAudio });
   } catch {
     // audio is a luxury; the road is not
   }
+}
 
+async function startShift(playDepartureIntro = false): Promise<void> {
+  if (started) return;
+  started = true;
+  mainMenu.hide();
+
+  await ensureAudio();
+
+  if (shiftInitialized) return;
+  shiftInitialized = true;
   hydrateCheckpoint();
   if (endingScreen.visible) return;
 
+  // A selected checkpoint is already mid-shift. Its authored state has its own scene or
+  // choice, so never layer the Las Palmas dispatch and objective over it.
+  if (!playDepartureIntro) return;
   dispatch('dispatch.checkin');
   const intro = subtitle('intro.objective');
   hud.queue(null, intro.primary, intro.secondary, 5);
 }
 
-document.getElementById('boot-start')!.addEventListener('click', () => { void startShift(); });
+if (autoStartMode) void startShift(autoStartMode === 'new');
+canvas.addEventListener('click', () => {
+  if (started && !audio) void ensureAudio();
+});
 
 // --- keys --------------------------------------------------------------------
 input.on('toggleDebug', () => debug.toggle());
 input.on('toggleLang', () => {
   settings.lang = settings.lang === 'en' ? 'ru' : 'en';
   saveSettings();
-  refreshBootText();
+  mainMenu.refresh();
   journal.refresh(story);
 });
 input.on('toggleJournal', () => {
@@ -581,7 +648,14 @@ input.on('inspect', () => {
 });
 input.on('radioPower', () => { radio?.togglePower(); });
 input.on('radioSeek', () => { radio?.seek(); });
-input.on('horn', () => { engineAudio?.hiss(0.45, 0.18); });
+input.on('horn', () => {
+  if (!interactions.onFoot) {
+    engineAudio?.hiss(0.45, 0.18);
+    return;
+  }
+  const on = interactions.toggleFlashlight();
+  hud.say(null, on ? t('flashlight.on') : t('flashlight.off'), null, 1.2);
+});
 
 /** Testing travel keeps long-route content practical to tune without simulating eighty real miles. */
 function jumpToStoryMile(mile: number): void {
@@ -789,6 +863,7 @@ function recoverInterruptedScene(): void {
 
 const routeState: RouteState = { mile: 0, minutes: 0, speedMph: 0, flags: new Set<string>() };
 input.on('pause', () => {
+  if (!started) return;
   if (endingScreen.visible || choices.active) return;
   if (journal.visible) {
     journal.close();
@@ -830,7 +905,7 @@ const loop = new Loop((dt, elapsed) => {
   if (path.ensure(station, ROAD_BEHIND, ROAD_AHEAD)) road.rebuild();
   if (origin.update(bus.position)) road.rebuild();
   props.update(station);
-  storyStops.update(bus.miles);
+  storyStops.update(bus.miles, dt);
 
   // The coach body is approximated by a circle around its centre for roadside props.
   // This is intentionally forgiving at the corners, where a first-person driver cannot
@@ -856,13 +931,18 @@ const loop = new Loop((dt, elapsed) => {
   traffic.update(dt, bus.distance);
 
   cabin.sync(bus.position, bus.heading, bus.pitch, bus.roll);
+  cabin.setExteriorMotion(bus.distance, bus.wheelAngle, bus.braking, bus.highBeam);
   // The physical side mirror should never drift into the forward view as a black block.
   // Keep the housing alive for the whole eased camera move, not merely while the physical
   // key is down. This also prevents a black/pop frame when Q is released.
   cabin.leftMirror.mesh.visible = leftMirrorGlance > 0.01 || input.isDown('lookLeft') || leftMirrorLatched;
   if (choices.active || endingScreen.visible) hud.prompt(null);
   else interactions.update(dt, bus, input);
+  cabin.updateExterior(dt);
   placeCamera(dt);
+  // The desert is still a moonlit outdoor space, not a black void. The torch is for
+  // reading the detail of an object, while this lift keeps the stop navigable when off.
+  shared.uAmbient.value.setHex(interactions.onFoot ? 0x17223b : 0x0d1322);
   sky.update(camera, elapsed);
   sky.setDawn(Math.pow(clock.nightProgress, 2.5));
   landscape.update(camera);
@@ -896,14 +976,22 @@ const loop = new Loop((dt, elapsed) => {
     highBeam: bus.highBeam,
   });
 
-  // headlights sit on the body, aimed slightly down, and never follow the steering
+  // Headlights sit on the body, aimed slightly down, and never follow the steering.
   bus.localToWorld(-1.02, 0.95, 6.1, headL);
   bus.localToWorld(1.02, 0.95, 6.1, headR);
   headDir.copy(bus.forwardVector).setY(bus.highBeam ? -0.035 : -0.075).normalize();
-
   shared.uHeadRange.value = bus.highBeam ? 165 : 105;
   shared.uHeadCone.value.set(bus.highBeam ? 0.992 : 0.985, bus.highBeam ? 0.9 : 0.8);
   shared.uHeadIntensity.value = bus.highBeam ? 3.2 : 2.75;
+
+  const torchOn = interactions.onFoot && interactions.flashlightOn;
+  if (torchOn) {
+    camera.getWorldDirection(torchDirection);
+    torchDirection.y -= 0.08;
+    torchDirection.normalize();
+    torchPosition.copy(camera.position).addScaledVector(torchDirection, 0.16);
+  }
+  shared.uTorchIntensity.value = torchOn ? 2.4 : 0;
 
   // the mirror renders first and leaves the shader uniforms pointing at its own camera,
   // so the world rig has to be restored before the main pass
@@ -922,6 +1010,7 @@ const loop = new Loop((dt, elapsed) => {
     sky.moonDirection,
   );
   updateHeadlights(camera, headL, headR, headDir);
+  updateTorch(camera, torchPosition, torchDirection);
   updateMoon(camera, sky.moonDirection);
 
   if (started && renderer.post.fade > 0 && !paused) {

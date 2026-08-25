@@ -5,6 +5,7 @@ import { canvasTexture, mileMarkerTexture, signTexture } from '../render/texture
 import { hash1 } from '../core/rng';
 import { RoutePath, STATION_SPACING, terrainAt } from './curvature';
 import { METRES_PER_MILE } from '../core/units';
+import { STORY_MILES } from './stops';
 
 /**
  * Everything standing beside the road.
@@ -347,8 +348,9 @@ export class PropField {
       wanted.add(`delineator|${i}|0`);
       wanted.add(`delineator|${i}|1`);
 
-      // barbed wire, with gaps where the range opens up
-      if (hash1(i, this.seed + 55) > 0.35) wanted.add(`fence|${i}|0`);
+      // Barbed wire has a deliberate break at Miller's Gas; the forecourt must have a
+      // drivable entrance rather than a procedural fence running through its pumps.
+      if (!this.isMillersForecourt(i) && hash1(i, this.seed + 55) > 0.35) wanted.add(`fence|${i}|0`);
 
       // vegetation
       for (let s = 0; s < 3; s++) {
@@ -511,6 +513,11 @@ export class PropField {
         return this.place(slot.object, index, 7.4, 0, 'road');
       }
     }
+  }
+
+  private isMillersForecourt(index: number): boolean {
+    const millersStation = Math.round((this.mileZero + STORY_MILES.millersGas * METRES_PER_MILE) / STATION_SPACING);
+    return Math.abs(index - millersStation) <= 2;
   }
 
   shift(offset: THREE.Vector3): void {

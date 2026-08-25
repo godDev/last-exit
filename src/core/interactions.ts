@@ -18,6 +18,7 @@ export interface InteractionUi {
  */
 export class Interactions {
   onFoot = false;
+  flashlightOn = false;
   private readonly position = new THREE.Vector3();
   private readonly direction = new THREE.Vector3();
   private readonly up = new THREE.Vector3(0, 1, 0);
@@ -61,6 +62,10 @@ export class Interactions {
     const delta = this.position.clone().sub(door).setY(0);
     if (delta.length() > 28) this.position.copy(door).addScaledVector(delta.normalize(), 28);
 
+    // Story props are physical during an exterior scene: walls, pumps, counters and door
+    // leaves all push the walking camera out instead of letting it cut through the model.
+    this.stops.resolveWalkCollision(this.position);
+
     // Follow the actual procedural surface under the player, including shoulder slope and
     // desert undulation. Binding Y to the parked bus worked only near the door and caused
     // the camera to sink into raised terrain farther into the field.
@@ -68,6 +73,7 @@ export class Interactions {
     this.position.y += (standingEyeY - this.position.y) * Math.min(1, dt * 18);
 
     const atDoor = this.position.distanceTo(door.setY(this.position.y)) < 2.1;
+    const buildingDoor = this.stops.doorNear(this.position);
     const inspect = this.stops.inspectableNear(this.position);
     const missing = this.missingEvidence();
     this.ui.prompt(
@@ -75,8 +81,12 @@ export class Interactions {
         ? missing.length > 0
           ? (settings.lang === 'ru' ? 'СНАЧАЛА НАЙДИ УЛИКУ' : 'FIND THE CLUE FIRST')
           : (settings.lang === 'ru' ? 'E  ВОЙТИ В АВТОБУС' : 'E  RETURN TO BUS')
+        : buildingDoor
+          ? `${settings.lang === 'ru'
+            ? buildingDoor.open ? 'E  ЗАКРЫТЬ ДВЕРЬ' : 'E  ОТКРЫТЬ ДВЕРЬ'
+            : buildingDoor.open ? 'E  CLOSE DOOR' : 'E  OPEN DOOR'}  ·  ${settings.lang === 'ru' ? buildingDoor.titleRu ?? buildingDoor.title : buildingDoor.title}`
         : inspect
-          ? `${settings.lang === 'ru' ? 'E  ОСМОТРЕТЬ' : 'E  INSPECT'}  ·  ${inspect.title}`
+          ? `${settings.lang === 'ru' ? 'E  ОСМОТРЕТЬ' : 'E  INSPECT'}  ·  ${settings.lang === 'ru' ? inspect.titleRu ?? inspect.title : inspect.title}`
           : null,
     );
     if (!input.wasTapped('interact')) return;
@@ -86,6 +96,16 @@ export class Interactions {
       settings.lang === 'ru' ? 'Осмотри нужные предметы, затем возвращайся в автобус.' : 'Inspect the important objects, then return to the bus.',
       3,
     );
+    else if (buildingDoor) {
+      const open = this.stops.toggleDoor(buildingDoor.id);
+      this.ui.say(null,
+        settings.lang === 'ru'
+          ? open ? 'ДВЕРЬ МАГАЗИНА ОТКРЫТА.' : 'ДВЕРЬ МАГАЗИНА ЗАКРЫТА.'
+          : open ? 'THE STORE DOOR IS OPEN.' : 'THE STORE DOOR IS CLOSED.',
+        null,
+        1.4,
+      );
+    }
     else if (inspect) this.inspect(inspect.id);
   }
 
@@ -107,12 +127,20 @@ export class Interactions {
     camera.updateMatrixWorld();
   }
 
+  /** The torch is deliberately manual: darkness is part of the exterior investigation. */
+  toggleFlashlight(): boolean {
+    if (!this.onFoot) return false;
+    this.flashlightOn = !this.flashlightOn;
+    return this.flashlightOn;
+  }
+
   private exit(bus: Bus, stop: StopSpec): void {
     // The interaction prompt deliberately has a forgiving approach radius. Once the
     // driver commits to leaving the bus, park it at the authored turnout so the compact
     // on-foot area is actually reachable rather than dozens of metres down the shoulder.
     bus.restoreMiles(stop.mile);
     this.onFoot = true;
+    this.flashlightOn = false;
     this.activeStop = stop;
     const door = bus.localToWorld(2.3, 0.05, -4.7);
     this.position.copy(door).add(new THREE.Vector3(0, 1.68, 0));
@@ -139,6 +167,7 @@ export class Interactions {
   private enter(): void {
     const stop = this.activeStop;
     this.onFoot = false;
+    this.flashlightOn = false;
     this.activeStop = null;
     this.story.checkpoint({ kind: 'driving' });
     if (stop) this.onEnter(stop);

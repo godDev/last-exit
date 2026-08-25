@@ -93,6 +93,11 @@ export class AudioSystem {
     return AudioSystem.instance;
   }
 
+  /** Freeze every synthesized source while a full-screen menu owns the game. */
+  suspend(): Promise<void> {
+    return this.ctx.state === 'running' ? this.ctx.suspend() : Promise.resolve();
+  }
+
   get now(): number {
     return this.ctx.currentTime;
   }
