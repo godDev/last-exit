@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createRetroMaterial } from '../render/retroMaterial';
+import { createPBRMaterial, enablePBRShadows } from '../render/pbrMaterial';
 import { canvasTexture } from '../render/textures';
 import { RoutePath } from './curvature';
 
@@ -30,8 +30,12 @@ function glareTexture(inner: string, outer: string): THREE.Texture {
   });
 }
 
-function mat(color: number, ambientBoost = 1): THREE.ShaderMaterial {
-  return createRetroMaterial({ color, snap: 0.18, ambientBoost });
+function mat(color: number, ambientBoost = 1): THREE.MeshStandardMaterial {
+  return createPBRMaterial({
+    surface: ambientBoost > 1.55 ? 'metal' : ambientBoost < 0.8 ? 'rubber' : 'paint',
+    color,
+    roughness: THREE.MathUtils.clamp(0.78 - (ambientBoost - 1) * 0.28, 0.24, 0.94),
+  });
 }
 
 function box(
@@ -210,6 +214,7 @@ export class Traffic {
       object.add(makeLamp(tail, isTruck ? 0.68 : 0.58, -halfWidth, lampY, back));
       object.add(makeLamp(tail, isTruck ? 0.68 : 0.58, halfWidth, lampY, back));
       if (isTruck) for (let i = -2; i <= 2; i++) object.add(makeLamp(marker, 0.3, i * 0.42, 3.5, 4.91));
+      enablePBRShadows(object);
       object.visible = false;
       this.group.add(object);
       return { kind, object, active: false, distance: 0, speed: 0, direction: -1, lateral: -1.9 };

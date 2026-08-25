@@ -95,15 +95,15 @@ const FRAG = /* glsl */ `
     // --- tape transport -----------------------------------------------------
     // A slow head-switching band plus rare whole-frame slip.
     float band = fract(uv.y * 1.7 - uTime * 0.06);
-    float bandMask = smoothstep(0.975, 1.0, band) * (0.42 + uGlitch);
-    float slip = step(0.9982, hash12(vec2(floor(uTime * 12.0), 3.0))) * (0.4 + uGlitch);
+    float bandMask = smoothstep(0.975, 1.0, band) * uGlitch;
+    float slip = step(0.9982, hash12(vec2(floor(uTime * 12.0), 3.0))) * uGlitch;
     float lineNoise = (hash12(vec2(floor(uv.y * uSourceRes.y), floor(uTime * 24.0))) - 0.5);
-    uv.x += lineNoise * (0.0016 * uRetro + bandMask * 0.012 + slip * 0.03);
+    uv.x += lineNoise * (uGlitch * 0.003 + bandMask * 0.012 + slip * 0.03);
 
     // Slow vertical tracking error and a thin switching line near the bottom of frame.
     float trackingPos = fract(uTime * 0.047);
     float tracking = exp(-abs(uv.y - trackingPos) * 190.0);
-    uv.x += sin(uv.y * 210.0 + uTime * 7.0) * tracking * 0.009 * uRetro;
+    uv.x += sin(uv.y * 210.0 + uTime * 7.0) * tracking * 0.009 * uRetro * uGlitch;
 
     uv = clamp(uv, vec2(0.0005), vec2(0.9995));
 
@@ -140,6 +140,7 @@ const FRAG = /* glsl */ `
     float dust = windshieldDust(uv) * brightBehind;
     col += vec3(0.16, 0.135, 0.09) * dust * (0.20 + 0.24 * uRetro);
 
+
     // A very restrained horizontal flare from the hottest lamps and reflective signs.
     vec3 flareSample = texture2D(tDiffuse, vec2(uv.x + 0.025, uv.y)).rgb;
     float flare = smoothstep(0.72, 1.15, lastExitLuma(flareSample));
@@ -167,13 +168,13 @@ const FRAG = /* glsl */ `
 
     // luminance noise: film grain and tape hiss are the same gesture here
     float grain = hash12(pixel + fract(uTime) * 913.0) - 0.5;
-    col += grain * (0.013 + uGlitch * 0.09) * uRetro;
+    col += grain * (0.0035 + uGlitch * 0.09) * uRetro;
 
     // Short-lived white RF scratches, sparse enough not to obscure authored detail.
     float rfLine = step(0.992, hash12(vec2(floor(pixel.y), floor(uTime * 18.0))));
     float rfGrain = hash12(vec2(floor(pixel.x * 0.35), floor(uTime * 30.0)));
-    col += vec3(rfGrain) * rfLine * 0.075 * uRetro;
-    col += vec3(0.055, 0.07, 0.09) * tracking * uRetro;
+    col += vec3(rfGrain) * rfLine * 0.075 * uRetro * uGlitch;
+    col += vec3(0.055, 0.07, 0.09) * tracking * uRetro * uGlitch;
 
     // --- the display itself -------------------------------------------------
     float scan = 1.0 - 0.055 * uRetro * step(0.5, fract(pixel.y * 0.5));

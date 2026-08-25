@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { PostPass } from './post';
-import { settings } from '../core/settings';
+import { GRAPHICS_PRESETS, settings, type GraphicsQuality } from '../core/settings';
 import { shared } from './retroMaterial';
 
 /**
@@ -31,6 +31,11 @@ export class Renderer {
     this.gl.setPixelRatio(1); // the upscale is the effect; a sharp one would defeat it
     this.gl.setClearColor(0x000000, 1);
     this.gl.autoClear = true;
+    this.gl.shadowMap.enabled = settings.graphicsQuality !== 'low';
+    this.gl.shadowMap.type = THREE.PCFSoftShadowMap;
+    // The scene renders twice into mirrors before the main view. Updating shadow maps on
+    // every render would triple their cost, so the loop explicitly requests one update.
+    this.gl.shadowMap.autoUpdate = false;
 
     this.target = new THREE.WebGLRenderTarget(this.width, this.height, {
       minFilter: THREE.LinearFilter,
@@ -38,7 +43,7 @@ export class Renderer {
       depthBuffer: true,
       colorSpace: THREE.LinearSRGBColorSpace,
     });
-    this.target.samples = 4;
+    this.target.samples = GRAPHICS_PRESETS[settings.graphicsQuality].msaaSamples;
 
     this.post = new PostPass(this.target.texture);
     this.resize();
@@ -47,6 +52,21 @@ export class Renderer {
 
   get aspect(): number {
     return this.width / this.height;
+  }
+
+  get resolution(): string { return `${this.width}x${this.height}`; }
+
+  applyGraphicsQuality(quality: GraphicsQuality): void {
+    settings.graphicsQuality = quality;
+    const preset = GRAPHICS_PRESETS[quality];
+    settings.renderHeight = preset.renderHeight;
+    this.target.samples = preset.msaaSamples;
+    this.gl.shadowMap.enabled = quality !== 'low';
+    this.resize();
+  }
+
+  requestShadowUpdate(): void {
+    if (this.gl.shadowMap.enabled) this.gl.shadowMap.needsUpdate = true;
   }
 
   resize(): void {

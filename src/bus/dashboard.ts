@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { createRetroMaterial } from '../render/retroMaterial';
 import { canvasTexture } from '../render/textures';
 import { LAYER_DIRECT_ONLY } from './mirror';
+import { createPBRMaterial } from '../render/pbrMaterial';
 
 /**
  * The driver's station.
@@ -196,24 +197,45 @@ export class Dashboard {
   private readonly dialWidth = 0.29;
   private readonly stalk = new THREE.Group();
   private readonly gearStick = new THREE.Group();
+  private readonly clutchPedal = new THREE.Group();
+  private readonly brakePedal = new THREE.Group();
+  private readonly acceleratorPedal = new THREE.Group();
+  private readonly leftBoot = new THREE.Group();
+  private readonly rightBoot = new THREE.Group();
+  private readonly leftThigh = new THREE.Mesh();
+  private readonly leftShin = new THREE.Mesh();
+  private readonly leftKnee = new THREE.Mesh();
+  private readonly rightThigh = new THREE.Mesh();
+  private readonly rightShin = new THREE.Mesh();
+  private readonly rightKnee = new THREE.Mesh();
+  private readonly legFrom = new THREE.Vector3();
+  private readonly legTo = new THREE.Vector3();
+  private readonly legMid = new THREE.Vector3();
+  private readonly legDirection = new THREE.Vector3();
+  private readonly legUp = new THREE.Vector3(0, 1, 0);
+  private lastGear: number | 'R' | null = null;
+  private clutchTime = 0;
 
-  constructor(driverX: number) {
-    // Kept dark deliberately. The dash fills the bottom third of every frame for four
-    // hours; it has to read as a silhouette with lit instruments in it, not as a surface.
+  constructor(private readonly driverX: number) {
+    // Dark, but with enough value separation for the moulded layers to remain legible
+    // under the restrained cabin light.
     const shell = createRetroMaterial({
-      color: 0x17150f,
+      color: 0x25231f,
       fogScale: 0,
-      ambientBoost: 1.15,
-      cabin: 0.5,
+      ambientBoost: 1.65,
+      cabin: 0.72,
       snap: 0.2,
     });
     const trim = createRetroMaterial({
-      color: 0x101009,
+      color: 0x181714,
       fogScale: 0,
-      ambientBoost: 1.35,
-      cabin: 0.6,
+      ambientBoost: 1.55,
+      cabin: 0.68,
       snap: 0.2,
     });
+    const dashTop = createRetroMaterial({ color: 0x312e28, fogScale: 0, ambientBoost: 1.75, cabin: 0.7, roughness: 0.86, snap: 0.16 });
+    const fasciaMaterial = createRetroMaterial({ color: 0x292722, fogScale: 0, ambientBoost: 1.68, cabin: 0.74, roughness: 0.72, snap: 0.16 });
+    const podMaterial = createRetroMaterial({ color: 0x35312b, fogScale: 0, ambientBoost: 1.82, cabin: 0.76, roughness: 0.62, snap: 0.14 });
 
     // --- the moulded dash ---------------------------------------------------
     // Shallow and pushed forward: it ends 36 cm ahead of the wheel hub instead of
@@ -226,22 +248,34 @@ export class Dashboard {
     // farther of the two from the eye, so thickening it downward, well behind the
     // fascia's visible face, closes that gap without changing anything the default,
     // straight-ahead view shows.
-    const cowl = new THREE.Mesh(new THREE.BoxGeometry(2.46, 0.24, 0.4), shell);
+    const cowl = new THREE.Mesh(new THREE.BoxGeometry(2.46, 0.24, 0.4), dashTop);
     cowl.position.set(0, 1.62, DASH_Z);
     cowl.rotation.x = -0.12;
 
-    const fascia = new THREE.Mesh(new THREE.BoxGeometry(2.46, 0.42, 0.09), shell);
-    fascia.position.set(0, 1.52, DASH_FACE_Z);
+    // Keep the fascia shallow below the gauges. A full-height rectangular slab crosses
+    // the driver's downward view and hides the animated knees and pedals.
+    const fascia = new THREE.Mesh(new THREE.BoxGeometry(2.46, 0.26, 0.09), fasciaMaterial);
+    fascia.position.set(0, 1.6, DASH_FACE_Z);
     fascia.rotation.x = 0.18;
 
-    const knees = new THREE.Mesh(new THREE.BoxGeometry(2.46, 0.34, 0.4), shell);
-    knees.position.set(0, 1.2, -5.9);
+    // The lower dash has a real driver footwell instead of one solid black box. Only the
+    // narrow outer return and passenger-side panel remain around the opening.
+    const leftKneeReturn = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.26, 0.32), shell);
+    leftKneeReturn.position.set(-1.16, 1.2, -5.9);
+    const passengerKneePanel = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.26, 0.32), shell);
+    passengerKneePanel.position.set(0.48, 1.2, -5.9);
 
-    this.group.add(cowl, fascia, knees);
+    this.group.add(cowl, fascia, leftKneeReturn, passengerKneePanel);
 
     // Layered vinyl panels, seams and visible fasteners keep the broad dashboard from
     // reading as three primitive boxes from the driver's seat.
     const seamMaterial = createRetroMaterial({ color: 0x4a4337, fogScale: 0, ambientBoost: 2.2, cabin: 0.9, snap: 0.15 });
+    // Raised piping at the front edge catches a narrow highlight and separates the top
+    // pad from the vertical fascia instead of letting both merge into one rectangle.
+    const dashPiping = new THREE.Mesh(new THREE.BoxGeometry(2.34, 0.018, 0.022), seamMaterial);
+    dashPiping.position.set(0, 1.69, DASH_FACE_Z + 0.055);
+    dashPiping.rotation.x = 0.08;
+    this.group.add(dashPiping);
     for (const x of [-1.02, -0.46, 0.36, 0.98]) {
       const seam = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.27, 0.012), seamMaterial);
       seam.position.set(x, 1.52, DASH_FACE_Z + 0.052);
@@ -274,13 +308,13 @@ export class Dashboard {
     // The housing goes 11 cm along -normal, i.e. behind the dial faces. Put it at the same
     // point as the cluster and it hides every gauge in the bus.
     const [bodyY, bodyZ] = behindPod(0.11);
-    const podBody = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.25, 0.2), trim);
+    const podBody = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.25, 0.2), podMaterial);
     podBody.position.set(driverX, bodyY, bodyZ);
     podBody.rotation.x = -POD_TILT;
     this.group.add(podBody);
 
     // a thin lip along the top, kept shallow so it does not cross the horizon
-    const hood = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.032, 0.1), shell);
+    const hood = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.032, 0.1), dashTop);
     hood.position.set(driverX, POD_Y + POD_UP.y * 0.13, POD_Z + POD_UP.z * 0.13);
     hood.rotation.x = -0.52;
     this.group.add(hood);
@@ -533,8 +567,168 @@ export class Dashboard {
 
     this.group.add(gearLever);
 
+    // --- foot controls ---------------------------------------------------------
+    const pedalMetal = createPBRMaterial({ surface: 'metal', color: 0x54534d, roughness: 0.48 });
+    const pedalRubber = createPBRMaterial({ surface: 'rubber', color: 0x171614 });
+    // An unlit rubber footwell stays readable below the pedals even though the road and
+    // underside of the coach are almost black. Its top remains below the pedal pivots,
+    // so it cannot cover their movement or the driver's boots.
+    const footwellFloorMaterial = new THREE.MeshBasicMaterial({ color: 0x625f58, fog: false });
+    const footwellFloor = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.035, 5), footwellFloorMaterial);
+    footwellFloor.position.set(driverX, 0.81, -4);
+    this.group.add(footwellFloor);
+    const floorRibMaterial = new THREE.MeshBasicMaterial({ color: 0x777168, fog: false });
+    for (let rib = 0; rib < 12; rib++) {
+      const floorRib = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.008, 0.025), floorRibMaterial);
+      floorRib.position.set(driverX, 0.833, -5.7 + rib * 0.21);
+      this.group.add(floorRib);
+    }
+    const pedalSpecs: Array<[THREE.Group, number, number, number]> = [
+      [this.clutchPedal, driverX - 0.17, 0.12, -0.05],
+      [this.brakePedal, driverX + 0.01, 0.13, 0.02],
+      [this.acceleratorPedal, driverX + 0.19, 0.09, 0.09],
+    ];
+    for (const [pedal, x, width, lean] of pedalSpecs) {
+      // Pivot low on the front bulkhead, beneath the dashboard rather than directly
+      // below the steering wheel. The boot rests on the face from above.
+      pedal.position.set(x, 0.78, -5.72);
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.31, 0.025), pedalMetal);
+      arm.position.set(0, 0.13, 0.02);
+      arm.rotation.x = -0.24;
+      const face = new THREE.Mesh(new THREE.BoxGeometry(width, 0.075, 0.035), pedalRubber);
+      face.position.set(0, 0.29 + lean, 0.1);
+      face.rotation.x = -0.42;
+      pedal.add(arm, face);
+      // Three moulded ribs retain grip on wet boots.
+      for (let rib = -1; rib <= 1; rib++) {
+        const grip = new THREE.Mesh(new THREE.BoxGeometry(width * 0.78, 0.008, 0.008), pedalMetal);
+        grip.position.set(0, 0.29 + lean + rib * 0.021, 0.122);
+        grip.rotation.x = -0.42;
+        pedal.add(grip);
+      }
+      this.group.add(pedal);
+    }
+
+    // --- driver's legs --------------------------------------------------------
+    // These materials sit directly below the cabin lamp. Their albedo is reduced by
+    // 30% to keep the driver's legs from looking independently floodlit in first person.
+    const denim = createPBRMaterial({ surface: 'fabric', color: 0x0f1012, roughness: 0.98 });
+    const fadedDenim = createPBRMaterial({ surface: 'fabric', color: 0x222327, roughness: 1 });
+    // Deep brown leather: kept warm enough to read as brown under the cabin lamp,
+    // but darker than the previous pass.
+    const bootLeather = createPBRMaterial({ surface: 'paint', color: 0x24160d, roughness: 0.88, metalness: 0 });
+    const bootSole = createPBRMaterial({ surface: 'rubber', color: 0x17130f });
+    const driedMud = createPBRMaterial({ surface: 'plastic', color: 0x4e3c29, roughness: 1 });
+
+    const configureLeg = (thigh: THREE.Mesh, shin: THREE.Mesh, knee: THREE.Mesh): void => {
+      thigh.geometry = new THREE.CylinderGeometry(0.09, 0.115, 1, 12);
+      thigh.material = denim;
+      shin.geometry = new THREE.CylinderGeometry(0.073, 0.09, 1, 12);
+      shin.material = denim;
+      knee.geometry = new THREE.SphereGeometry(0.095, 12, 8);
+      knee.material = fadedDenim;
+      knee.scale.set(1.04, 0.9, 1.08);
+      this.group.add(thigh, shin, knee);
+    };
+    configureLeg(this.leftThigh, this.leftShin, this.leftKnee);
+    configureLeg(this.rightThigh, this.rightShin, this.rightKnee);
+
+    const buildBoot = (boot: THREE.Group): void => {
+      const ankle = new THREE.Mesh(new THREE.CylinderGeometry(0.068, 0.075, 0.18, 10), bootLeather);
+      ankle.position.set(0, 0.08, 0.055);
+      // Flattened ellipsoids make a rounded shoe silhouette without the long capsule
+      // end faces that can clip across the first-person camera at steep view angles.
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.1, 14, 9), bootLeather);
+      body.scale.set(0.72, 0.52, 1.38);
+      body.position.set(0, 0.002, -0.055);
+      body.rotation.x = -0.1;
+      const toe = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 7), bootLeather);
+      toe.scale.set(1, 0.65, 1.18);
+      toe.position.set(0, -0.002, -0.18);
+      const sole = new THREE.Mesh(new THREE.SphereGeometry(0.1, 14, 8), bootSole);
+      sole.scale.set(0.76, 0.18, 1.55);
+      sole.position.set(0, -0.065, -0.075);
+      const heel = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.065, 0.09), bootSole);
+      heel.position.set(0, -0.075, 0.055);
+      boot.add(ankle, body, toe, sole, heel);
+      for (const [x, z, scale] of [[-0.035, -0.2, 0.7], [0.04, -0.13, 0.52], [-0.045, 0.0, 0.42]] as const) {
+        const mud = new THREE.Mesh(new THREE.SphereGeometry(0.035, 7, 5), driedMud);
+        mud.scale.set(scale, 0.22, scale * 1.35);
+        mud.position.set(x, 0.052, z);
+        boot.add(mud);
+      }
+      // Simple dark lace ladder across the instep.
+      for (let lace = 0; lace < 4; lace++) {
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(0.115, 0.007, 0.012), bootSole);
+        strip.position.set(0, 0.065, -0.105 + lace * 0.035);
+        boot.add(strip);
+      }
+      // Denim cuff overlaps the boot shaft, hiding the mechanical joint between meshes.
+      const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.079, 0.086, 0.12, 10), denim);
+      cuff.position.set(0, 0.17, 0.055);
+      const wornHem = new THREE.Mesh(new THREE.TorusGeometry(0.083, 0.009, 6, 12), fadedDenim);
+      wornHem.rotation.x = Math.PI / 2;
+      wornHem.position.set(0, 0.115, 0.055);
+      boot.add(cuff, wornHem);
+      this.group.add(boot);
+    };
+    this.leftBoot.position.set(driverX - 0.17, 1.27, -5.46);
+    this.rightBoot.position.set(driverX + 0.19, 1.27, -5.46);
+    buildBoot(this.leftBoot);
+    buildBoot(this.rightBoot);
+    this.poseDriverLegs();
+
+    // --- driver's ancillary equipment ----------------------------------------
+    const equipmentPlastic = createPBRMaterial({ surface: 'plastic', color: 0x26231e, roughness: 0.72 });
+    const fareBox = new THREE.Group();
+    fareBox.position.set(driverX + 0.57, 1.36, -5.34);
+    const fareBody = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.38, 0.2), equipmentPlastic);
+    const fareTop = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.035, 0.18), pedalMetal);
+    fareTop.position.y = 0.205;
+    const slot = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.008, 0.025), pedalRubber);
+    slot.position.set(0, 0.226, -0.015);
+    fareBox.add(fareBody, fareTop, slot);
+    this.group.add(fareBox);
+
     // the whole binnacle belongs to the driver's eyes, not to the mirror
     this.group.traverse((child) => child.layers.set(LAYER_DIRECT_ONLY));
+  }
+
+  private poseDriverLegs(): void {
+    const poseLeg = (
+      thigh: THREE.Mesh,
+      shin: THREE.Mesh,
+      knee: THREE.Mesh,
+      boot: THREE.Group,
+      hipX: number,
+    ): void => {
+      // The upper leg begins below the driver's viewpoint/seat, bends at a visible
+      // knee and enters the boot through the denim cuff. This keeps the body reading
+      // as one continuous seated driver instead of several floating props.
+      // Keep the whole upper leg in front of the eye plane. Starting it behind the
+      // camera makes the cylinder cross the near plane and explode into a black bar.
+      this.legFrom.set(hipX, 1.58, -4.98);
+      this.legTo.set(boot.position.x, boot.position.y + 0.23, boot.position.z + 0.055);
+      this.legMid.set(
+        THREE.MathUtils.lerp(this.legFrom.x, this.legTo.x, 0.53),
+        1.43,
+        -5.18,
+      );
+      this.alignLegSegment(thigh, this.legFrom, this.legMid);
+      this.alignLegSegment(shin, this.legMid, this.legTo);
+      knee.position.copy(this.legMid);
+    };
+
+    poseLeg(this.leftThigh, this.leftShin, this.leftKnee, this.leftBoot, this.driverX - 0.12);
+    poseLeg(this.rightThigh, this.rightShin, this.rightKnee, this.rightBoot, this.driverX + 0.12);
+  }
+
+  private alignLegSegment(mesh: THREE.Mesh, from: THREE.Vector3, to: THREE.Vector3): void {
+    this.legDirection.subVectors(to, from);
+    const length = this.legDirection.length();
+    mesh.position.copy(from).addScaledVector(this.legDirection, 0.5);
+    mesh.scale.set(1, length, 1);
+    mesh.quaternion.setFromUnitVectors(this.legUp, this.legDirection.normalize());
   }
 
   private buildWheel(trim: THREE.ShaderMaterial): void {
@@ -738,10 +932,14 @@ export class Dashboard {
   }
 
   update(data: {
+    dt: number;
     speedMph: number;
+    signedSpeed: number;
     rpm: number;
     wheelAngle: number;
     gear: number | 'R';
+    forwardPressed: boolean;
+    reversePressed: boolean;
     miles: number;
     clock: string;
     highBeam: boolean;
@@ -769,6 +967,45 @@ export class Dashboard {
     const lever = moving ? positions[data.gear] ?? positions[5] : { x: 0, z: 0 };
     this.gearStick.rotation.x = THREE.MathUtils.lerp(this.gearStick.rotation.x, lever.x, 0.16);
     this.gearStick.rotation.z = THREE.MathUtils.lerp(this.gearStick.rotation.z, lever.z, 0.16);
+
+    // The clutch follows each actual gearbox transition, including entering reverse. The
+    // short hold makes the movement readable without keeping it down between gears.
+    if (this.lastGear === null) this.lastGear = data.gear;
+    else if (data.gear !== this.lastGear) {
+      this.lastGear = data.gear;
+      this.clutchTime = 0.34;
+    }
+    this.clutchTime = Math.max(0, this.clutchTime - data.dt);
+
+    const reversing = data.signedSpeed < -0.08;
+    const gasDown = data.forwardPressed || (data.reversePressed && reversing);
+    const brakeDown = data.reversePressed && !reversing;
+    const pedalResponse = 1 - Math.exp(-data.dt * 15);
+    const depress = (pedal: THREE.Group, down: boolean, travel: number): void => {
+      pedal.rotation.x = THREE.MathUtils.lerp(pedal.rotation.x, down ? travel : 0, pedalResponse);
+    };
+    depress(this.clutchPedal, this.clutchTime > 0, -0.22);
+    depress(this.brakePedal, brakeDown, -0.18);
+    depress(this.acceleratorPedal, gasDown, -0.14);
+    // Boots follow the same hinge direction as the pedals. The right foot also slides
+    // across the footwell when moving from accelerator to brake.
+    this.leftBoot.rotation.x = THREE.MathUtils.lerp(this.leftBoot.rotation.x, this.clutchTime > 0 ? -0.18 : 0, pedalResponse);
+    const rightPress = brakeDown ? -0.15 : gasDown ? -0.12 : 0;
+    this.rightBoot.rotation.x = THREE.MathUtils.lerp(this.rightBoot.rotation.x, rightPress, pedalResponse);
+    this.rightBoot.position.x = THREE.MathUtils.lerp(
+      this.rightBoot.position.x,
+      brakeDown ? this.driverX + 0.01 : this.driverX + 0.19,
+      1 - Math.exp(-data.dt * 10),
+    );
+    // Lift the sole during the lateral transfer. At either pedal it settles back down,
+    // so the right foot visibly moves from gas to brake instead of gliding sideways.
+    const pedalTravel = THREE.MathUtils.clamp(
+      (this.rightBoot.position.x - (this.driverX + 0.01)) / 0.18,
+      0,
+      1,
+    );
+    this.rightBoot.position.y = 1.27 + Math.sin(pedalTravel * Math.PI) * 0.075;
+    this.poseDriverLegs();
 
     if (data.clock !== this.lastClock) {
       this.lastClock = data.clock;

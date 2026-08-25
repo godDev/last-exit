@@ -8,6 +8,7 @@ import { settings, saveSettings } from '../core/settings';
 export class DebugPanel {
   private readonly root: HTMLElement;
   private accum = 0;
+  private frames = 0;
 
   constructor() {
     this.root = document.getElementById('debug')!;
@@ -33,8 +34,12 @@ export class DebugPanel {
   ): void {
     if (!settings.showDebug) return;
     this.accum += dt;
+    this.frames++;
     if (this.accum < 0.25) return;
+    const fps = this.frames / this.accum;
+    const frameMs = (this.accum / this.frames) * 1000;
     this.accum = 0;
+    this.frames = 0;
 
     let objects = 0;
     scene.traverse(() => objects++);
@@ -44,6 +49,8 @@ export class DebugPanel {
       ([k, v]) => `${k.padEnd(9)} ${typeof v === 'number' ? v.toFixed(2) : v}`,
     );
     lines.push(
+      `${'fps'.padEnd(9)} ${fps.toFixed(1)}`,
+      `${'frame ms'.padEnd(9)} ${frameMs.toFixed(2)}`,
       `${'draws'.padEnd(9)} ${sceneStats.calls}`,
       `${'tris'.padEnd(9)} ${sceneStats.triangles}`,
       `${'objects'.padEnd(9)} ${objects}`,

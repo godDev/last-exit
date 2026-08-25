@@ -89,6 +89,8 @@ export class Road {
       // The road is the one surface the player stares at for four hours; full vertex
       // snapping on quads this large turns into seasickness.
       snap: 0.35,
+      roughness: 0.88,
+      metalness: 0.02,
       // the ribbon is authored from one cross-section; double-siding it means the
       // winding can never quietly cull the ground away
       side: THREE.DoubleSide,
@@ -97,6 +99,7 @@ export class Road {
     this.mesh = new THREE.Mesh(this.geometry, material);
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 0;
+
     this.rebuild();
   }
 
@@ -104,28 +107,36 @@ export class Road {
   rebuild(): void {
     const pts = this.path.points;
     const first = this.path.firstIndex;
+    // At the beginning of a shift there are no negative RoutePath stations. Fill the
+    // missing rear portion explicitly; otherwise the downward view sees the empty space
+    // before station zero as a large black trapezoid beneath the cab.
+    const missingBehind = Math.max(0, this.stations - pts.length);
     // preserve the dash phase across rebuilds while keeping v small
     const phase = (((first * STATION_SPACING) % DASH_CYCLE) + DASH_CYCLE) % DASH_CYCLE;
 
     const tmpColor = new THREE.Color();
 
     for (let s = 0; s < this.stations; s++) {
-      const p = pts[Math.min(s, pts.length - 1)];
-      const cos = Math.cos(p.heading);
-      const sin = Math.sin(p.heading);
+      const source = pts[Math.min(Math.max(0, s - missingBehind), pts.length - 1)];
+      const rearSteps = Math.max(0, missingBehind - s);
+      const stationIndex = source.index - rearSteps;
+      const stationX = source.x - Math.sin(source.heading) * STATION_SPACING * rearSteps;
+      const stationZ = source.z - Math.cos(source.heading) * STATION_SPACING * rearSteps;
+      const cos = Math.cos(source.heading);
+      const sin = Math.sin(source.heading);
       // right-hand side of the direction of travel
       const rx = -cos;
       const rz = sin;
-      const v = (p.index - first) * STATION_SPACING + phase;
+      const v = (stationIndex - first) * STATION_SPACING + phase;
 
       for (let c = 0; c < this.cols; c++) {
         const cp = CROSS[c];
         const i = (s * this.cols + c) * 3;
         const j = (s * this.cols + c) * 2;
 
-        this.positions[i] = p.x + rx * cp.u;
-        this.positions[i + 1] = p.y + cp.dy + terrainAt(p.index, cp.u, this.seed);
-        this.positions[i + 2] = p.z + rz * cp.u;
+        this.positions[i] = stationX + rx * cp.u;
+        this.positions[i + 1] = source.y + cp.dy + terrainAt(stationIndex, cp.u, this.seed);
+        this.positions[i + 2] = stationZ + rz * cp.u;
 
         this.uvs[j] = cp.u;
         this.uvs[j + 1] = v;

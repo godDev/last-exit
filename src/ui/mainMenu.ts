@@ -1,6 +1,6 @@
 import { MENU_CHECKPOINTS, type MenuCheckpointId } from '../core/checkpoints';
 import type { SaveData } from '../core/story';
-import { settings } from '../core/settings';
+import { GRAPHICS_PRESETS, settings, type GraphicsQuality } from '../core/settings';
 import { t } from '../content/i18n';
 
 export interface MainMenuActions {
@@ -8,6 +8,7 @@ export interface MainMenuActions {
   newShift(): void;
   selectCheckpoint(id: MenuCheckpointId): void;
   setLanguage(lang: 'en' | 'ru'): void;
+  setGraphicsQuality(quality: GraphicsQuality): void;
   showMenuMusic(): void;
   hideMenuMusic(): void;
   retryMenuMusic(): void;
@@ -57,6 +58,11 @@ export class MainMenu {
       this.actions.setLanguage(language.dataset.menuLang === 'ru' ? 'ru' : 'en');
       return;
     }
+    const quality = target.closest<HTMLButtonElement>('[data-menu-quality]');
+    if (quality) {
+      this.actions.setGraphicsQuality(quality.dataset.menuQuality as GraphicsQuality);
+      return;
+    }
     const action = target.closest<HTMLButtonElement>('[data-menu-action]')?.dataset.menuAction;
     if (action === 'continue' && this.save) this.actions.continueShift();
     else if (action === 'new') this.actions.newShift();
@@ -93,6 +99,12 @@ export class MainMenu {
           <div class="menu-language" aria-label="${t('menu.language')}">
             <button type="button" data-menu-lang="en" class="${settings.lang === 'en' ? 'active' : ''}">EN</button>
             <button type="button" data-menu-lang="ru" class="${settings.lang === 'ru' ? 'active' : ''}">RU</button>
+          </div>
+          <div class="menu-quality" aria-label="Graphics quality">
+            <span>${settings.lang === 'ru' ? 'ГРАФИКА' : 'GRAPHICS'}</span>
+            ${(Object.keys(GRAPHICS_PRESETS) as GraphicsQuality[]).map((quality) => `
+              <button type="button" data-menu-quality="${quality}" class="${settings.graphicsQuality === quality ? 'active' : ''}">${GRAPHICS_PRESETS[quality].label}</button>
+            `).join('')}
           </div>
         </div>
         <aside class="menu-atmosphere" aria-label="${t('menu.atmosphereLabel')}">
