@@ -78,6 +78,7 @@ function merged(parts: THREE.BufferGeometry[], what: string): THREE.BufferGeomet
 const PANEL = 0x2b2721;
 const TRIM = 0x1d1a16;
 const RUBBER = 0x151310;
+const COACH_WHEEL_RADIUS = 0.47;
 
 function buildShell(): THREE.BufferGeometry {
   const front = -BUS_LENGTH / 2;
@@ -189,6 +190,43 @@ function buildSeats(): THREE.BufferGeometry {
   return merged(parts, 'seats');
 }
 
+function decalTexture(text: string, background: string, foreground: string): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 64;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('could not create coach decal canvas');
+
+  context.fillStyle = background;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = '#e1c977';
+  context.fillRect(0, 4, canvas.width, 4);
+  context.fillRect(0, canvas.height - 8, canvas.width, 4);
+  context.fillStyle = foreground;
+  context.font = 'bold 25px monospace';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillText(text, canvas.width / 2, canvas.height / 2 + 1);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  return texture;
+}
+
+interface ExteriorWheel {
+  /** The axle group retains its Z alignment while its local Y axis rolls the tyre. */
+  readonly roll: THREE.Group;
+  readonly steer: THREE.Group | null;
+}
+
+interface ExteriorDoorLeaf {
+  readonly pivot: THREE.Group;
+  /** The two leaves fold outwards in opposite directions from their outer hinges. */
+  readonly openingDirection: number;
+}
+
 export class Cabin {
   readonly group = new THREE.Group();
   readonly dashboard: Dashboard;
@@ -201,6 +239,12 @@ export class Cabin {
   private readonly mirrorTarget = new THREE.Vector3();
   private readonly leftMirrorTarget = new THREE.Vector3();
   private readonly leftMirrorCamera = new THREE.Vector3();
+  private readonly exteriorWheels: ExteriorWheel[] = [];
+  private readonly exteriorDoorLeaves: ExteriorDoorLeaf[] = [];
+  private readonly brakeLampMaterials: THREE.ShaderMaterial[] = [];
+  private readonly headlampMaterials: THREE.ShaderMaterial[] = [];
+  private doorOpen = 0;
+  private doorTarget = 0;
 
   constructor() {
     const surfaces = createRetroMaterial({
@@ -217,7 +261,7 @@ export class Cabin {
     const seats = new THREE.Mesh(buildSeats(), surfaces);
     shell.frustumCulled = false;
     seats.frustumCulled = false;
-    this.group.add(shell, seats);
+    this.group.add(shell, seats, this.buildExterior());
 
     // dim amber dome lights: the only light in the saloon all night
     const lamp = createRetroMaterial({ color: 0xffcc88, mode: 'emissive', emissive: 0.5, snap: 0.2 });
@@ -256,6 +300,287 @@ export class Cabin {
   }
 
   /**
+   * Exterior coach body. The cabin used to be readable only as a box of interior panels
+   * once the player stepped outside. This second skin gives it the broad painted panels,
+   * dark glazing and heavy running gear of a late-70s route coach, while leaving every
+   * inward-facing window surface culled so it cannot obstruct the driver's view.
+   */
+  private buildExterior(): THREE.Group {
+    const root = new THREE.Group();
+    root.name = 'route-coach-exterior';
+
+    const paintParts: THREE.BufferGeometry[] = [];
+    const trimParts: THREE.BufferGeometry[] = [];
+    const chromeParts: THREE.BufferGeometry[] = [];
+    const glassMaterial = createRetroMaterial({
+      color: 0x0d1820,
+      transparent: true,
+      opacity: 0.5,
+      depthWrite: false,
+      snap: 0.25,
+      ambientBoost: 0.7,
+    });
+    const add = (
+      target: THREE.BufferGeometry[],
+      w: number,
+      h: number,
+      d: number,
+      x: number,
+      y: number,
+      z: number,
+      colour: number,
+    ) => target.push(box(w, h, d, x, y, z, colour));
+
+    const front = -BUS_LENGTH / 2;
+    const back = BUS_LENGTH / 2;
+    const sideX = 1.365;
+    const addSideGlass = (side: number, width: number, height: number, y: number, z: number): void => {
+      const pane = new THREE.Mesh(new THREE.PlaneGeometry(width, height), glassMaterial);
+      pane.rotation.y = side < 0 ? -Math.PI / 2 : Math.PI / 2;
+      pane.position.set(side * (sideX + 0.082), y, z);
+      root.add(pane);
+    };
+
+    // Long lower panels, waist stripe and roof cap turn the saloon shell into a painted
+    // vehicle rather than an exposed room. The narrow dark belt also gives the livery a
+    // recognisable silhouette at headlight range.
+    for (const side of [-1, 1]) {
+      const x = side * sideX;
+      add(paintParts, 0.11, 0.84, BUS_LENGTH - 0.42, x, 1.17, 0, 0x34444d);
+      add(paintParts, 0.1, 0.16, BUS_LENGTH - 0.5, x + side * 0.012, 1.53, 0, 0xd1c29d);
+      add(paintParts, 0.108, 0.12, BUS_LENGTH - 0.48, x + side * 0.015, 0.83, 0, 0x26323a);
+      add(trimParts, 0.13, 0.055, BUS_LENGTH - 0.4, x + side * 0.025, 0.64, 0, 0x121416);
+      add(trimParts, 0.13, 0.06, BUS_LENGTH - 0.42, x + side * 0.024, 1.67, 0, 0x17191a);
+      add(chromeParts, 0.045, 0.045, BUS_LENGTH - 0.7, x + side * 0.078, 1.46, 0, 0x9b9d93);
+
+      // Individual tinted panes read clearly from outside. They sit outside the interior
+      // wall and use front-face culling by default, making them invisible from the cabin.
+      const paneZ = [-4.44, -3.18, -1.92, -0.66, 0.6, 1.86, 3.12, 4.38];
+      if (side < 0) {
+        // Driver's sliding window fills the otherwise blank bay ahead of the first saloon pane.
+        addSideGlass(side, 0.62, 1.08, 2.24, -5.22);
+        add(trimParts, 0.08, 1.2, 0.06, x + side * 0.085, 2.23, -5.55, 0x17191a);
+        add(trimParts, 0.08, 1.2, 0.06, x + side * 0.085, 2.23, -4.89, 0x17191a);
+      }
+      for (const z of paneZ) {
+        if (side > 0 && z < -3.75) continue; // passenger door occupies the front kerb bay
+        addSideGlass(side, 1.05, 1.02, 2.24, z);
+        add(trimParts, 0.08, 1.18, 0.06, x + side * 0.085, 2.23, z - 0.58, 0x17191a);
+        add(trimParts, 0.08, 1.18, 0.06, x + side * 0.085, 2.23, z + 0.58, 0x17191a);
+      }
+      // A narrow rear quarter window closes the last dark gap before the emergency exit.
+      addSideGlass(side, 0.62, 1.02, 2.24, 5.2);
+      add(trimParts, 0.08, 1.18, 0.06, x + side * 0.085, 2.23, 4.85, 0x17191a);
+      add(trimParts, 0.08, 1.18, 0.06, x + side * 0.085, 2.23, 5.55, 0x17191a);
+      add(trimParts, 0.08, 0.07, BUS_LENGTH - 1.25, x + side * 0.08, 1.69, 0.15, 0x141618);
+      add(trimParts, 0.08, 0.07, BUS_LENGTH - 1.25, x + side * 0.08, 2.82, 0.15, 0x141618);
+    }
+
+    // Roof rain gutter and the slightly proud front/rear caps make the body feel pressed
+    // from separate steel panels instead of being one cuboid.
+    add(paintParts, 2.78, 0.2, BUS_LENGTH - 0.1, 0, 3.18, 0, 0x2e3d45);
+    add(trimParts, 0.06, 0.08, BUS_LENGTH - 0.22, -1.39, 3.1, 0, 0x151719);
+    add(trimParts, 0.06, 0.08, BUS_LENGTH - 0.22, 1.39, 3.1, 0, 0x151719);
+    add(paintParts, 2.7, 0.74, 0.16, 0, 1.16, front - 0.06, 0x374852);
+    add(paintParts, 2.7, 0.26, 0.16, 0, 2.98, front - 0.06, 0x2d3d45);
+    add(paintParts, 2.7, 0.74, 0.16, 0, 1.16, back + 0.06, 0x33434c);
+    add(paintParts, 2.7, 0.26, 0.16, 0, 2.98, back + 0.06, 0x2c3b43);
+
+    // Split windscreen and rear glass. These panes only render from the exterior-facing
+    // side, preserving the unobstructed first-person windshield already in the cabin.
+    for (const x of [-0.61, 0.61]) {
+      const windscreen = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.1), glassMaterial);
+      windscreen.rotation.y = Math.PI;
+      windscreen.position.set(x, 2.25, front - 0.15);
+      root.add(windscreen);
+      const rearGlass = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.04), glassMaterial);
+      rearGlass.position.set(x, 2.23, back + 0.15);
+      root.add(rearGlass);
+    }
+    add(trimParts, 0.085, 1.28, 0.07, 0, 2.25, front - 0.18, 0x151719);
+    add(trimParts, 0.085, 1.24, 0.07, 0, 2.23, back + 0.18, 0x151719);
+    for (const x of [-1.25, 1.25]) {
+      add(trimParts, 0.11, 1.34, 0.07, x, 2.26, front - 0.18, 0x151719);
+      add(trimParts, 0.11, 1.28, 0.07, x, 2.24, back + 0.18, 0x151719);
+    }
+    add(trimParts, 2.66, 0.08, 0.07, 0, 1.63, front - 0.18, 0x151719);
+    add(trimParts, 2.66, 0.08, 0.07, 0, 2.88, front - 0.18, 0x151719);
+    add(trimParts, 2.66, 0.08, 0.07, 0, 1.64, back + 0.18, 0x151719);
+    add(trimParts, 2.66, 0.08, 0.07, 0, 2.82, back + 0.18, 0x151719);
+
+    root.add(
+      new THREE.Mesh(merged(paintParts, 'exterior paint'), createRetroMaterial({ vertexColors: true, snap: 0.45 })),
+      new THREE.Mesh(merged(trimParts, 'exterior trim'), createRetroMaterial({ vertexColors: true, snap: 0.35 })),
+      new THREE.Mesh(merged(chromeParts, 'exterior chrome'), createRetroMaterial({ vertexColors: true, snap: 0.22, ambientBoost: 1.18 })),
+    );
+
+    this.addCoachDoor(root, sideX, glassMaterial);
+    this.addCoachLights(root, front, back);
+    this.addCoachWheels(root);
+    this.addCoachDecals(root, front, back);
+    return root;
+  }
+
+  private addCoachDoor(root: THREE.Group, sideX: number, glassMaterial: THREE.ShaderMaterial): void {
+    const panel = createRetroMaterial({ color: 0x34444d, snap: 0.32 });
+    const trim = createRetroMaterial({ color: 0x151719, snap: 0.22 });
+    const chrome = createRetroMaterial({ color: 0x9b9d93, snap: 0.16, ambientBoost: 1.15 });
+    const stepLamp = createRetroMaterial({ color: 0xffb64a, mode: 'emissive', emissive: 0.9, snap: 0.12 });
+    const outsideX = sideX + 0.11;
+
+    // Stationary frame and sill stay with the body while the two leaves fold away from it.
+    for (const z of [-5.54, -3.82]) {
+      const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.11, 1.58, 0.065), trim);
+      jamb.position.set(outsideX, 2.16, z);
+      root.add(jamb);
+    }
+    const header = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.09, 1.76), trim);
+    header.position.set(outsideX, 2.93, -4.68);
+    const sill = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.1, 1.76), trim);
+    sill.position.set(outsideX, 1.42, -4.68);
+    const step = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.08, 1.52), trim);
+    step.position.set(sideX + 0.28, 0.88, -4.68);
+    const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.055, 0.32), stepLamp);
+    lamp.position.set(sideX + 0.18, 1.02, -4.68);
+    root.add(header, sill, step, lamp);
+
+    const makeLeaf = (hingeZ: number, extension: number, openingDirection: number): void => {
+      const pivot = new THREE.Group();
+      pivot.position.set(outsideX, 2.16, hingeZ);
+      const midZ = extension * 0.41;
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.42, 0.82), panel);
+      body.position.set(0, 0, midZ);
+      const glazing = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.94), glassMaterial);
+      glazing.rotation.y = Math.PI / 2;
+      glazing.position.set(0.056, 0.16, midZ);
+      const waist = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.075, 0.78), trim);
+      waist.position.set(0.01, -0.26, midZ);
+      const innerStile = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.33, 0.06), trim);
+      innerStile.position.set(0.01, 0, hingeZ < -4.6 ? 0.79 : -0.79);
+      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.05, 0.21), chrome);
+      handle.position.set(0.07, -0.08, midZ + extension * 0.24);
+      pivot.add(body, glazing, waist, innerStile, handle);
+      root.add(pivot);
+      this.exteriorDoorLeaves.push({ pivot, openingDirection });
+    };
+
+    makeLeaf(-5.54, 1, 1);
+    makeLeaf(-3.82, -1, -1);
+  }
+
+  private addCoachLights(root: THREE.Group, front: number, back: number): void {
+    const housing = createRetroMaterial({ color: 0x161719, snap: 0.2 });
+    const headlamp = createRetroMaterial({ color: 0xffe4ae, mode: 'emissive', emissive: 1.25, snap: 0.12 });
+    const marker = createRetroMaterial({ color: 0xffa238, mode: 'emissive', emissive: 0.82, snap: 0.12 });
+    const tail = createRetroMaterial({ color: 0xcd332b, mode: 'emissive', emissive: 0.72, snap: 0.12 });
+    this.headlampMaterials.push(headlamp);
+    this.brakeLampMaterials.push(tail);
+
+    for (const x of [-0.94, 0.94]) {
+      const surround = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.3, 0.07), housing);
+      surround.position.set(x, 1.14, front - 0.175);
+      root.add(surround);
+      const lens = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.17, 0.022), headlamp);
+      lens.position.set(x, 1.14, front - 0.222);
+      root.add(lens);
+    }
+    // An inset grille and five bars give the flat front a believable diesel cooling bay.
+    const grille = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.32, 0.035), housing);
+    grille.position.set(0, 0.98, front - 0.18);
+    root.add(grille);
+    const grilleBar = createRetroMaterial({ color: 0x73766f, snap: 0.16, ambientBoost: 1.08 });
+    for (let y = 0.86; y <= 1.1; y += 0.06) {
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.018, 0.025), grilleBar);
+      bar.position.set(0, y, front - 0.205);
+      root.add(bar);
+    }
+
+    for (const x of [-1.14, 1.14]) {
+      const sideMarker = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.025), marker);
+      sideMarker.position.set(x, 2.96, front - 0.19);
+      root.add(sideMarker);
+      const rearLamp = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.22, 0.025), tail);
+      rearLamp.position.set(x, 1.18, back + 0.205);
+      root.add(rearLamp);
+      const rearMarker = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.025), marker);
+      rearMarker.position.set(x, 2.96, back + 0.2);
+      root.add(rearMarker);
+    }
+
+    const bumperMaterial = createRetroMaterial({ color: 0x777a76, snap: 0.2, ambientBoost: 1.22 });
+    for (const z of [front - 0.18, back + 0.18]) {
+      const bumper = new THREE.Mesh(new THREE.BoxGeometry(2.82, 0.16, 0.16), bumperMaterial);
+      bumper.position.set(0, 0.68, z);
+      root.add(bumper);
+    }
+  }
+
+  private addCoachWheels(root: THREE.Group): void {
+    const tyreMaterial = createRetroMaterial({ color: 0x101113, snap: 0.45, ambientBoost: 0.8 });
+    const rimMaterial = createRetroMaterial({ color: 0x8d918e, snap: 0.18, ambientBoost: 1.2 });
+    const hubMaterial = createRetroMaterial({ color: 0x363a3b, snap: 0.16, ambientBoost: 1.1 });
+    const flapMaterial = createRetroMaterial({ color: 0x121314, snap: 0.3 });
+
+    for (const z of [-3.72, 3.72]) {
+      for (const side of [-1, 1]) {
+        const steering = new THREE.Group();
+        steering.position.set(side * 1.4, COACH_WHEEL_RADIUS + 0.03, z);
+        const roll = new THREE.Group();
+        roll.rotation.z = Math.PI / 2;
+        steering.add(roll);
+
+        const tyre = new THREE.Mesh(new THREE.CylinderGeometry(COACH_WHEEL_RADIUS, COACH_WHEEL_RADIUS, 0.25, 12), tyreMaterial);
+        roll.add(tyre);
+        const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.265, 10), rimMaterial);
+        rim.position.y = side * 0.014;
+        roll.add(rim);
+        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.115, 0.13, 0.282, 10), hubMaterial);
+        hub.position.y = side * 0.03;
+        roll.add(hub);
+        // A faceted ring is cheap but keeps the hub from reading as a flat grey coin.
+        for (let spoke = 0; spoke < 5; spoke++) {
+          const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.292, 6), hubMaterial);
+          const angle = (spoke / 5) * Math.PI * 2;
+          bolt.position.set(Math.cos(angle) * 0.19, side * 0.035, Math.sin(angle) * 0.19);
+          roll.add(bolt);
+        }
+        root.add(steering);
+        this.exteriorWheels.push({ roll, steer: z < 0 ? steering : null });
+
+        const flap = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.48, 0.38), flapMaterial);
+        flap.position.set(side * 1.38, 0.43, z + 0.58);
+        root.add(flap);
+      }
+    }
+  }
+
+  private addCoachDecals(root: THREE.Group, front: number, back: number): void {
+    const sideDecal = createRetroMaterial({
+      map: decalTexture('ROUTE 17  ·  NIGHT LINE', '#21313a', '#e7d9b4'),
+      snap: 0.14,
+      ambientBoost: 1.12,
+    });
+    for (const side of [-1, 1]) {
+      const decal = new THREE.Mesh(new THREE.PlaneGeometry(1.9, 0.28), sideDecal);
+      decal.rotation.y = side < 0 ? -Math.PI / 2 : Math.PI / 2;
+      decal.position.set(side * 1.43, 1.26, 0.95);
+      root.add(decal);
+    }
+
+    const plate = createRetroMaterial({
+      map: decalTexture('N 17', '#d8d1b9', '#17202a'),
+      snap: 0.1,
+      ambientBoost: 1.2,
+    });
+    for (const z of [front - 0.235, back + 0.235]) {
+      const license = new THREE.Mesh(new THREE.PlaneGeometry(0.46, 0.16), plate);
+      if (z < 0) license.rotation.y = Math.PI;
+      license.position.set(0, 0.79, z);
+      root.add(license);
+    }
+  }
+
+  /**
    * Put the cabin where the bus is. Rotating by heading + PI is what makes cabin-local
    * axes line up with the camera's, so "forward" means the same thing in both.
    */
@@ -263,6 +588,34 @@ export class Cabin {
     this.group.position.copy(position);
     this.group.rotation.set(pitch * 0.4, heading + Math.PI, roll * 0.4, 'YXZ');
     this.group.updateMatrixWorld(true);
+  }
+
+  /** Keep the exterior's mechanical details coupled to the driving model. */
+  setExteriorMotion(distance: number, steering: number, braking: number, highBeam: boolean): void {
+    const rotation = distance / COACH_WHEEL_RADIUS;
+    for (const wheel of this.exteriorWheels) {
+      wheel.roll.rotation.y = rotation;
+      if (wheel.steer) wheel.steer.rotation.y = steering * 0.42;
+    }
+    for (const lamp of this.brakeLampMaterials) {
+      lamp.uniforms.uEmissive.value = braking > 0.05 ? 2.1 : 0.72;
+    }
+    for (const lamp of this.headlampMaterials) {
+      lamp.uniforms.uEmissive.value = highBeam ? 2.1 : 1.25;
+    }
+  }
+
+  /** Request the folding passenger door to open for an exterior stop or close for departure. */
+  setDoorOpen(open: boolean): void {
+    this.doorTarget = open ? 1 : 0;
+  }
+
+  /** Smooth door movement is kept here with the body, rather than in interaction logic. */
+  updateExterior(dt: number): void {
+    this.doorOpen += (this.doorTarget - this.doorOpen) * (1 - Math.exp(-dt * 7));
+    for (const leaf of this.exteriorDoorLeaves) {
+      leaf.pivot.rotation.y = leaf.openingDirection * this.doorOpen * 1.22;
+    }
   }
 
   /** Aim the mirror down the aisle at head height and hand back its world position. */

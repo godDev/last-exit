@@ -2,8 +2,6 @@ export type Lang = 'en' | 'ru';
 
 export interface Settings {
   lang: Lang;
-  /** Show the English line under the translation. */
-  dualSubtitles: boolean;
   masterVolume: number;
   /** 0 = clean render, 1 = full VHS damage. */
   retro: number;
@@ -16,7 +14,6 @@ const KEY = 'last-exit/settings';
 
 const DEFAULTS: Settings = {
   lang: 'en',
-  dualSubtitles: true,
   masterVolume: 0.8,
   retro: 1,
   // Still deliberately low-resolution, but with enough detail for the dashboard,

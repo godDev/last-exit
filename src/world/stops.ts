@@ -43,7 +43,14 @@ export const STORY_STOPS: StopSpec[] = [
 ];
 
 interface StopVisual { spec: StopSpec; object: THREE.Group; placed: boolean; }
-export interface Inspectable { id: string; title: string; }
+export interface Inspectable { id: string; title: string; titleRu?: string; }
+export interface DoorInteraction { id: string; title: string; titleRu?: string; open: boolean; }
+
+interface DoorState extends DoorInteraction {
+  stopId: StopSpec['id'];
+  pivot: THREE.Group;
+  target: number;
+}
 
 /**
  * Sparse authored landmarks layered over the procedural roadside. They are created only
@@ -52,6 +59,9 @@ export interface Inspectable { id: string; title: string; }
 export class StoryStops implements Shiftable {
   readonly group = new THREE.Group();
   private readonly stops: StopVisual[];
+  private readonly doors: DoorState[] = [];
+  private readonly collisionLocal = new THREE.Vector3();
+  private readonly collisionWorld = new THREE.Vector3();
 
   /** @param mileZero route distance, in metres, that the coach calls mile 0. */
   constructor(private readonly path: RoutePath, private readonly mileZero = 0) {
@@ -62,7 +72,7 @@ export class StoryStops implements Shiftable {
     }
   }
 
-  update(mile: number): void {
+  update(mile: number, dt = 0): void {
     for (const stop of this.stops) {
       // Keep a landmark alive across its whole approach. Fog decides when it first becomes
       // visible; this prevents a structure from popping in only after its warning plays.
@@ -73,6 +83,7 @@ export class StoryStops implements Shiftable {
       if (near && !stop.placed && this.canPlace(stop.spec)) this.place(stop);
       stop.object.visible = near && stop.placed;
     }
+    this.updateDoors(dt);
   }
 
   nearest(mile: number): StopSpec | null {
@@ -94,7 +105,81 @@ export class StoryStops implements Shiftable {
     return null;
   }
 
+  doorNear(position: THREE.Vector3): DoorInteraction | null {
+    const anchor = new THREE.Vector3();
+    for (const door of this.doors) {
+      const stop = this.stops.find((candidate) => candidate.spec.id === door.stopId);
+      if (!stop?.object.visible) continue;
+      door.pivot.localToWorld(anchor.set(0, 0, 0.45));
+      if (anchor.distanceTo(position) < 1.65) return door;
+    }
+    return null;
+  }
+
+  toggleDoor(id: string): boolean {
+    const door = this.doors.find((candidate) => candidate.id === id);
+    if (!door) return false;
+    door.open = !door.open;
+    door.target = door.open ? 1 : 0;
+    return door.open;
+  }
+
+  /**
+   * Keep the walking camera outside every marked box. Collision happens in each mesh's
+   * local space, so it stays correct when a stop is rotated with the road or a door swings.
+   */
+  resolveWalkCollision(position: THREE.Vector3, radius = 0.28): void {
+    for (let pass = 0; pass < 2; pass++) {
+      let adjusted = false;
+      for (const stop of this.stops) {
+        if (!stop.object.visible) continue;
+        stop.object.traverse((object) => {
+          if (!(object instanceof THREE.Mesh) || !object.userData.walkCollider) return;
+          const geometry = object.geometry as THREE.BufferGeometry;
+          if (!geometry.boundingBox) geometry.computeBoundingBox();
+          const bounds = geometry.boundingBox;
+          if (!bounds) return;
+
+          const local = object.worldToLocal(this.collisionLocal.copy(position));
+          const playerFeet = local.y - 1.68;
+          if (playerFeet > bounds.max.y || local.y < bounds.min.y) return;
+
+          const minX = bounds.min.x - radius;
+          const maxX = bounds.max.x + radius;
+          const minZ = bounds.min.z - radius;
+          const maxZ = bounds.max.z + radius;
+          if (local.x <= minX || local.x >= maxX || local.z <= minZ || local.z >= maxZ) return;
+
+          const toMinX = local.x - minX;
+          const toMaxX = maxX - local.x;
+          const toMinZ = local.z - minZ;
+          const toMaxZ = maxZ - local.z;
+          const smallest = Math.min(toMinX, toMaxX, toMinZ, toMaxZ);
+          const pad = 0.006;
+          if (smallest === toMinX) local.x = minX - pad;
+          else if (smallest === toMaxX) local.x = maxX + pad;
+          else if (smallest === toMinZ) local.z = minZ - pad;
+          else local.z = maxZ + pad;
+
+          object.localToWorld(this.collisionWorld.copy(local));
+          position.x = this.collisionWorld.x;
+          position.z = this.collisionWorld.z;
+          adjusted = true;
+        });
+      }
+      if (!adjusted) return;
+    }
+  }
+
   shift(offset: THREE.Vector3): void { this.group.position.sub(offset); }
+
+  private updateDoors(dt: number): void {
+    if (dt <= 0) return;
+    for (const door of this.doors) {
+      const wanted = door.target * 1.3;
+      door.pivot.rotation.y += (wanted - door.pivot.rotation.y) * (1 - Math.exp(-dt * 8));
+    }
+  }
 
   private place(stop: StopVisual): void {
     const point = this.path.sample(this.mileZero + stop.spec.mile * METRES_PER_MILE);
@@ -102,9 +187,23 @@ export class StoryStops implements Shiftable {
     // StoryStops itself moves with the floating origin. Convert the current route-space
     // position back into the parent's local space so a stop first placed after a rebase
     // is not shifted a second time.
-    const local = this.group.worldToLocal(point.pos.clone()).addScaledVector(right, 8.5);
+    // Miller's occupies a real forecourt rather than clipping into the shoulder. It sits
+    // deeper in the field, while the other compact route landmarks remain close to the bus.
+    const routeDistance = this.mileZero + stop.spec.mile * METRES_PER_MILE;
+    const roadsideOffset = stop.spec.id === 'millers-gas' ? 13.5 : 8.5;
+    const local = this.group.worldToLocal(point.pos.clone()).addScaledVector(right, roadsideOffset);
+    // The authored model's floor is at local Y = 0. Anchor it to the same terrain profile
+    // the road and player use, so a distant forecourt never appears to float above the sand.
+    const ground = this.path.groundHeightAt(routeDistance, roadsideOffset);
+    local.y += ground - point.pos.y;
     stop.object.position.copy(local);
-    stop.object.rotation.y = point.heading + Math.PI;
+    stop.object.rotation.set(0, point.heading + Math.PI, 0);
+    if (stop.spec.id === 'millers-gas') {
+      // The forecourt follows the shoulder's long, gentle fall away from the highway.
+      // Limiting the lean preserves vertical-looking walls when local terrain is noisy.
+      const outerGround = this.path.groundHeightAt(routeDistance, roadsideOffset + 13);
+      stop.object.rotateZ(THREE.MathUtils.clamp(Math.atan2(outerGround - ground, 13), -0.045, 0.045));
+    }
     stop.placed = true;
   }
 
@@ -147,11 +246,21 @@ export class StoryStops implements Shiftable {
     lamp.position.set(0, 3.15, -0.08);
     root.add(pole, sign, signFace, lamp);
     root.userData.title = spec.title;
-    const addBox = (size: THREE.Vector3, position: THREE.Vector3, material = dark, inspect?: Inspectable) => {
+    const addBox = (
+      size: THREE.Vector3,
+      position: THREE.Vector3,
+      material = dark,
+      inspect?: Inspectable,
+      solid = size.y >= 0.45,
+    ) => {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(size.x, size.y, size.z), material);
       mesh.position.copy(position);
       if (inspect) mesh.userData.inspect = inspect;
+      // Low slabs and curbs are ground detail; standing-height furniture and walls keep
+      // the player out. Individual doors also receive this marker while they animate.
+      if (solid) mesh.userData.walkCollider = true;
       root.add(mesh);
+      return mesh;
     };
     const addPerson = (position: THREE.Vector3, coat: number) => {
       const person = new THREE.Group();
@@ -184,15 +293,252 @@ export class StoryStops implements Shiftable {
       });
       addPerson(new THREE.Vector3(-.35, 0, -.85), 0x3b454d);
     } else if (spec.id === 'millers-gas') {
-      addBox(new THREE.Vector3(8.8, 0.24, 4.4), new THREE.Vector3(-3.5, 3.4, 0));
-      addBox(new THREE.Vector3(0.28, 3.4, 0.28), new THREE.Vector3(-7.1, 1.7, -1.7));
-      addBox(new THREE.Vector3(0.28, 3.4, 0.28), new THREE.Vector3(0.1, 1.7, -1.7));
-      addBox(new THREE.Vector3(1.05, 1.75, 0.72), new THREE.Vector3(-3.8, 0.9, 1.6), dark, {
-        id: 'millers.pump', title: 'PUMP 2 — OUT OF SERVICE',
+      // Forecourt: the old station is deliberately more substantial than a single prop.
+      // Its closest pump is still well clear of the road, leaving an actual apron for the
+      // coach to pull alongside rather than a building that intersects the lane.
+      const tile = (texture: THREE.CanvasTexture, x: number, y: number) => {
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        texture.repeat.set(x, y);
+        return texture;
+      };
+      const concreteTexture = tile(canvasTexture(192, 192, (ctx, w, h) => {
+        ctx.fillStyle = '#595650';
+        ctx.fillRect(0, 0, w, h);
+        for (let i = 0; i < 86; i++) {
+          const x = (i * 47) % w;
+          const y = (i * 83) % h;
+          const size = 1 + (i % 4);
+          ctx.fillStyle = i % 3 ? '#47443e' : '#6d6960';
+          ctx.fillRect(x, y, size, size);
+        }
+        ctx.strokeStyle = '#35332f';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(8, 35); ctx.lineTo(62, 45); ctx.lineTo(91, 81); ctx.lineTo(154, 87); ctx.lineTo(186, 126);
+        ctx.moveTo(22, 161); ctx.lineTo(68, 138); ctx.lineTo(107, 147); ctx.lineTo(143, 172);
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(23, 20, 16, .34)';
+        ctx.beginPath();
+        ctx.ellipse(140, 43, 25, 12, .1, 0, Math.PI * 2);
+        ctx.fill();
+      }), 6, 3);
+      const wallTexture = tile(canvasTexture(192, 128, (ctx, w, h) => {
+        ctx.fillStyle = '#665b49';
+        ctx.fillRect(0, 0, w, h);
+        for (let y = 10; y < h; y += 17) {
+          ctx.fillStyle = '#4d4538';
+          ctx.fillRect(0, y, w, 3);
+          ctx.fillStyle = 'rgba(186, 158, 108, .18)';
+          ctx.fillRect(0, y + 3, w, 1);
+        }
+        for (let i = 0; i < 25; i++) {
+          ctx.fillStyle = i % 2 ? 'rgba(30, 24, 18, .22)' : 'rgba(194, 164, 107, .14)';
+          ctx.fillRect((i * 37) % w, (i * 61) % h, 2 + (i % 7), 3 + (i % 11));
+        }
+        ctx.fillStyle = 'rgba(31, 25, 19, .2)';
+        ctx.fillRect(23, 0, 8, h);
+        ctx.fillRect(141, 0, 5, h);
+      }), 2.5, 2.2);
+      const trimTexture = tile(canvasTexture(192, 64, (ctx, w, h) => {
+        ctx.fillStyle = '#2b2721';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = '#b57632';
+        ctx.fillRect(0, 10, w, 8);
+        ctx.fillStyle = '#e1b65e';
+        ctx.fillRect(0, 18, w, 3);
+        ctx.fillStyle = '#58371c';
+        for (let x = 6; x < w; x += 27) ctx.fillRect(x, 10, 8, 11);
+        ctx.fillStyle = 'rgba(0, 0, 0, .32)';
+        for (let i = 0; i < 18; i++) ctx.fillRect((i * 29) % w, (i * 17) % h, 3 + (i % 5), 2);
+      }), 3, 2);
+      const pumpTexture = tile(canvasTexture(96, 128, (ctx, w, h) => {
+        ctx.fillStyle = '#803127';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = '#b24b33';
+        ctx.fillRect(9, 7, w - 18, 18);
+        ctx.fillStyle = '#211e1b';
+        ctx.fillRect(16, 35, w - 32, 31);
+        ctx.fillStyle = '#9bb2ae';
+        ctx.fillRect(21, 40, w - 42, 17);
+        ctx.fillStyle = '#d8c894';
+        ctx.font = 'bold 10px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('REGULAR', w / 2, 53);
+        ctx.fillStyle = '#48231e';
+        for (let i = 0; i < 13; i++) ctx.fillRect((i * 23) % w, 75 + (i * 19) % 45, 5 + (i % 5), 3);
+      }), 1, 1);
+      const concrete = createRetroMaterial({ color: 0xffffff, map: concreteTexture, ambientBoost: 2.1, snap: 0.4 });
+      const wall = createRetroMaterial({ color: 0xffffff, map: wallTexture, ambientBoost: 2.4, snap: 0.4 });
+      const trim = createRetroMaterial({ color: 0xffffff, map: trimTexture, ambientBoost: 2.2, snap: 0.4 });
+      const windowLight = createRetroMaterial({ color: 0xffca72, mode: 'emissive', emissive: 0.62, snap: 0.32 });
+      const coldLight = createRetroMaterial({ color: 0x9fb4bd, mode: 'emissive', emissive: 0.38, snap: 0.32 });
+      const red = createRetroMaterial({ color: 0xffffff, map: pumpTexture, ambientBoost: 2.4, snap: 0.38 });
+
+      // Cracked concrete forecourt, raised curbs and a dark drainage strip.
+      addBox(new THREE.Vector3(18.5, 0.14, 10.5), new THREE.Vector3(7.2, .07, 0), concrete);
+      addBox(new THREE.Vector3(18.5, 0.1, .26), new THREE.Vector3(7.2, .13, -5.05), trim);
+      addBox(new THREE.Vector3(18.5, 0.1, .26), new THREE.Vector3(7.2, .13, 5.05), trim);
+      addBox(new THREE.Vector3(9.2, 0.08, .35), new THREE.Vector3(10.9, .16, 3.9), trim);
+
+      // Store: actual four walls and a doorway, rather than one solid cuboid. The front
+      // faces the road (negative local X), so the player can open the door and enter.
+      addBox(new THREE.Vector3(7.0, .1, 5.55), new THREE.Vector3(11.2, .19, 0), concrete, undefined, false);
+      addBox(new THREE.Vector3(.18, 3.15, 5.8), new THREE.Vector3(14.72, 1.58, 0), wall);
+      addBox(new THREE.Vector3(7.2, 3.15, .18), new THREE.Vector3(11.2, 1.58, -2.81), wall);
+      addBox(new THREE.Vector3(7.2, 3.15, .18), new THREE.Vector3(11.2, 1.58, 2.81), wall);
+      addBox(new THREE.Vector3(.18, 3.15, 1.7), new THREE.Vector3(7.68, 1.58, -2.0), wall);
+      addBox(new THREE.Vector3(.18, 3.15, 2.48), new THREE.Vector3(7.68, 1.58, 1.56), wall);
+      addBox(new THREE.Vector3(.18, .48, 1.62), new THREE.Vector3(7.68, 2.91, -.34), wall);
+      addBox(new THREE.Vector3(7.55, .26, 6.15), new THREE.Vector3(11.2, 3.24, 0), trim);
+
+      // Lit, dirty front panes make the stocked room readable from the forecourt without
+      // becoming solid duplicate walls over the facade segments.
+      addBox(new THREE.Vector3(.035, 1.3, 1.36), new THREE.Vector3(7.57, 1.93, -2.0), windowLight, undefined, false);
+      addBox(new THREE.Vector3(.035, 1.3, 1.74), new THREE.Vector3(7.57, 1.93, 1.6), coldLight, undefined, false);
+      for (const z of [-2.68, -1.32, .5, 1.85, 2.68]) {
+        addBox(new THREE.Vector3(.2, 1.58, .08), new THREE.Vector3(7.52, 1.9, z), trim);
+      }
+
+      // A hinged glazed door occupies the deliberate gap in the front wall. Its panel is
+      // also a collider, so it blocks the entrance while closed and swings out of the way.
+      const storeDoor = new THREE.Group();
+      storeDoor.position.set(7.52, 1.42, -1.15);
+      const doorPanel = new THREE.Mesh(new THREE.BoxGeometry(.1, 1.92, 1.62), trim);
+      doorPanel.position.set(0, 0, .81);
+      doorPanel.userData.walkCollider = true;
+      const doorGlass = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1.28), coldLight);
+      doorGlass.rotation.y = Math.PI / 2;
+      doorGlass.position.set(-.056, .14, .81);
+      const doorHandle = new THREE.Mesh(new THREE.BoxGeometry(.08, .06, .34), windowLight);
+      doorHandle.position.set(-.08, -.12, 1.25);
+      storeDoor.add(doorPanel, doorGlass, doorHandle);
+      root.add(storeDoor);
+      this.doors.push({
+        id: 'millers.store-door',
+        title: "MILLER'S STORE DOOR",
+        titleRu: 'ДВЕРЬ МАГАЗИНА MILLER’S',
+        stopId: spec.id,
+        pivot: storeDoor,
+        open: false,
+        target: 0,
       });
-      addBox(new THREE.Vector3(4.4, 2.6, 1.5), new THREE.Vector3(-7.4, 1.3, 2.1), dark, {
-        id: 'millers.receipt', title: "MILLER'S CASH REGISTER",
+      addBox(new THREE.Vector3(.4, .09, 1.55), new THREE.Vector3(7.8, .32, -.34), trim, undefined, false);
+
+      // Interior: the counter sits along the side, never across the entrance. Its rear
+      // remains more than a metre from the wall/shelves, leaving a believable cashier aisle.
+      const shelfWood = createRetroMaterial({ color: 0x423426, ambientBoost: 2.45, snap: .32 });
+      const packageTexture = (base: string, stripe: string, label: string) => canvasTexture(72, 112, (ctx, w, h) => {
+        ctx.fillStyle = base;
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = '#15130f';
+        ctx.fillRect(5, 5, w - 10, h - 10);
+        ctx.fillStyle = base;
+        ctx.fillRect(8, 8, w - 16, h - 16);
+        ctx.fillStyle = stripe;
+        ctx.fillRect(8, 38, w - 16, 26);
+        ctx.fillStyle = '#f2dfad';
+        ctx.font = 'bold 12px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, w / 2, 51);
+        ctx.fillStyle = 'rgba(255,255,255,.32)';
+        ctx.fillRect(13, 15, w - 26, 5);
+        ctx.fillStyle = 'rgba(0,0,0,.3)';
+        for (let i = 0; i < 5; i++) ctx.fillRect(12 + i * 10, 80 + (i % 2) * 5, 7, 3);
       });
+      const snackRed = createRetroMaterial({ color: 0xffffff, map: packageTexture('#8c3028', '#d8a43c', 'CHIPS'), ambientBoost: 2.7, snap: .25 });
+      const snackYellow = createRetroMaterial({ color: 0xffffff, map: packageTexture('#a36f26', '#e1c45e', 'CANDY'), ambientBoost: 2.7, snap: .25 });
+      const snackBlue = createRetroMaterial({ color: 0xffffff, map: packageTexture('#294f64', '#a6c8c4', 'SODA'), ambientBoost: 2.7, snap: .25 });
+      const counter = addBox(new THREE.Vector3(3.0, 1.2, .72), new THREE.Vector3(11.2, .79, 1.18), shelfWood);
+      counter.userData.walkCollider = true;
+      const register = addBox(new THREE.Vector3(.42, .24, .58), new THREE.Vector3(11.72, 1.48, .8), dark, {
+        id: 'millers.receipt', title: "MILLER'S CASH REGISTER", titleRu: 'КАССА MILLER’S',
+      });
+      register.userData.walkCollider = true;
+      addBox(new THREE.Vector3(.32, .18, .12), new THREE.Vector3(11.51, 1.68, .8), coldLight, undefined, false);
+      addBox(new THREE.Vector3(.54, .12, .12), new THREE.Vector3(11.64, 1.35, .8), trim, undefined, false);
+      // Small retail display on the customer side of the counter: labelled packets retain
+      // their artwork at close range instead of reading as flat coloured blocks.
+      addBox(new THREE.Vector3(.28, .42, .22), new THREE.Vector3(10.22, 1.62, .8), snackRed, undefined, false);
+      addBox(new THREE.Vector3(.24, .34, .22), new THREE.Vector3(10.58, 1.58, .79), snackYellow, undefined, false);
+      addBox(new THREE.Vector3(.23, .46, .2), new THREE.Vector3(10.92, 1.64, .79), snackBlue, undefined, false);
+
+      const addShelf = (x: number, z: number, alongZ: boolean) => {
+        const long = 2.1;
+        if (alongZ) {
+          addBox(new THREE.Vector3(.36, 2.05, .12), new THREE.Vector3(x, 1.18, z - long / 2), shelfWood);
+          addBox(new THREE.Vector3(.36, 2.05, .12), new THREE.Vector3(x, 1.18, z + long / 2), shelfWood);
+          for (const y of [.5, 1.08, 1.66]) addBox(new THREE.Vector3(.42, .08, long + .12), new THREE.Vector3(x, y, z), shelfWood, undefined, false);
+          for (let row = 0; row < 3; row++) {
+            for (let column = 0; column < 5; column++) {
+              const product = [snackRed, snackYellow, snackBlue][(row + column) % 3];
+              addBox(new THREE.Vector3(.24, .3, .25), new THREE.Vector3(x - .18, .72 + row * .58, z - .78 + column * .39), product, undefined, false);
+            }
+          }
+        } else {
+          addBox(new THREE.Vector3(.12, 2.05, .36), new THREE.Vector3(x - long / 2, 1.18, z), shelfWood);
+          addBox(new THREE.Vector3(.12, 2.05, .36), new THREE.Vector3(x + long / 2, 1.18, z), shelfWood);
+          for (const y of [.5, 1.08, 1.66]) addBox(new THREE.Vector3(long + .12, .08, .42), new THREE.Vector3(x, y, z), shelfWood, undefined, false);
+          for (let row = 0; row < 3; row++) {
+            for (let column = 0; column < 5; column++) {
+              const product = [snackBlue, snackYellow, snackRed][(row + column) % 3];
+              addBox(new THREE.Vector3(.25, .3, .24), new THREE.Vector3(x - .78 + column * .39, .72 + row * .58, z - .18), product, undefined, false);
+            }
+          }
+        }
+      };
+      addShelf(14.28, -1.32, true);
+      addShelf(14.28, 1.28, true);
+      addShelf(12.35, -2.46, false);
+      addBox(new THREE.Vector3(.72, 2.2, 1.02), new THREE.Vector3(13.8, 1.17, -2.18), coldLight);
+      addBox(new THREE.Vector3(.75, 1.9, .07), new THREE.Vector3(13.42, 1.18, -2.18), dark, undefined, false);
+      addBox(new THREE.Vector3(1.7, .055, .42), new THREE.Vector3(11.3, 2.88, -.3), windowLight, undefined, false);
+
+      // The projecting roadside sign is a texture rather than a glowing generic box.
+      const millersSignTexture = canvasTexture(512, 96, (ctx) => {
+        ctx.fillStyle = '#211b16';
+        ctx.fillRect(0, 0, 512, 96);
+        ctx.strokeStyle = '#c68a3a';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(4, 4, 504, 88);
+        ctx.fillStyle = '#f0c77c';
+        ctx.font = 'bold 29px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText("MILLER'S GAS", 256, 48);
+      });
+      const millersSign = new THREE.Mesh(
+        new THREE.PlaneGeometry(4.7, .88),
+        createRetroMaterial({ map: millersSignTexture, snap: .34, side: THREE.DoubleSide, ambientBoost: 2.8 }),
+      );
+      millersSign.position.set(7.37, 3.0, 0);
+      millersSign.rotation.y = -Math.PI / 2;
+      root.add(millersSign);
+
+      // Canopy and its four supports: it shelters two pumps and gives the scene a readable silhouette.
+      addBox(new THREE.Vector3(10.4, .26, 7.2), new THREE.Vector3(3.4, 4.28, 0), trim);
+      addBox(new THREE.Vector3(10.9, .12, 7.65), new THREE.Vector3(3.4, 4.13, 0), dark);
+      for (const x of [-1.15, 7.95]) {
+        for (const z of [-2.68, 2.68]) addBox(new THREE.Vector3(.3, 4.05, .3), new THREE.Vector3(x, 2.02, z), trim);
+      }
+
+      const addPump = (z: number, inspect?: Inspectable) => {
+        addBox(new THREE.Vector3(1.12, 1.9, .9), new THREE.Vector3(2.6, .96, z), red, inspect);
+        addBox(new THREE.Vector3(.78, .56, .06), new THREE.Vector3(2.02, 1.3, z), coldLight);
+        addBox(new THREE.Vector3(.18, 1.05, .14), new THREE.Vector3(3.16, 1.78, z + .32), trim);
+        addBox(new THREE.Vector3(.54, .08, .54), new THREE.Vector3(2.6, 1.95, z), trim);
+        addBox(new THREE.Vector3(.1, .72, .12), new THREE.Vector3(3.22, 1.1, z - .26), dark);
+      };
+      addPump(-1.72);
+      addPump(1.72, { id: 'millers.pump', title: 'PUMP 2 — OUT OF SERVICE' });
+
+      // Peripheral clutter makes the forecourt feel closed in haste rather than empty by design.
+      addBox(new THREE.Vector3(.72, .95, .72), new THREE.Vector3(15.0, .47, 3.85), trim);
+      addBox(new THREE.Vector3(.78, .84, .78), new THREE.Vector3(16.05, .42, 3.85), dark);
+      addBox(new THREE.Vector3(1.85, .58, 1.05), new THREE.Vector3(14.25, .3, -3.75), trim);
+      addBox(new THREE.Vector3(.16, 2.25, .16), new THREE.Vector3(-.75, 1.12, 4.25), dark);
+      addBox(new THREE.Vector3(.85, .72, .1), new THREE.Vector3(-.75, 2.25, 4.25), windowLight);
     } else if (spec.id === 'highway-patrol') {
       addBox(new THREE.Vector3(4.7, 1.15, 1.8), new THREE.Vector3(-3.2, .58, 1.4), dark, {
         id: 'patrol.cruiser', title: 'HIGHWAY PATROL CRUISER',

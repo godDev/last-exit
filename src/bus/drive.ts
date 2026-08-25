@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Input } from '../core/input';
 import type { RoutePath } from '../world/curvature';
-import { STATION_SPACING, terrainAt } from '../world/curvature';
+import { STATION_SPACING } from '../world/curvature';
 import { fbm1 } from '../core/rng';
 import { METRES_PER_MILE, MPH_PER_MS } from '../core/units';
 
@@ -398,16 +398,7 @@ export class Bus {
     const dx = position.x - frame.pos.x;
     const dz = position.z - frame.pos.z;
     const lateral = dx * routeRightX + dz * routeRightZ;
-    const a = Math.abs(lateral);
-
-    let graded = 0;
-    if (a <= 3.65) graded = 0.08 * (1 - a / 3.65);
-    else if (a <= 4.4) graded = THREE.MathUtils.lerp(0, -0.07, (a - 3.65) / 0.75);
-    else if (a <= 7.2) graded = THREE.MathUtils.lerp(-0.07, -0.34, (a - 4.4) / 2.8);
-    else if (a <= 13) graded = THREE.MathUtils.lerp(-0.34, -0.55, (a - 7.2) / 5.8);
-    else graded = -0.55 - Math.min(0.45, (a - 13) * 0.008);
-
-    return frame.pos.y + graded + terrainAt(Math.floor(sampleDistance / STATION_SPACING), lateral, this.seed);
+    return this.path.groundHeightAt(sampleDistance, lateral);
   }
 
   get headlightLeft(): THREE.Vector3 { return this.localToWorld(-1.02, 0.95, LENGTH * 0.5); }

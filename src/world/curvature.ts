@@ -42,6 +42,16 @@ export function terrainAt(index: number, lateral: number, seed: number): number 
   return (rough * 2.2 + swell * 14) * scale * scale;
 }
 
+/** Graded roadbed and shoulder profile shared by vehicles and authored roadside scenes. */
+export function shoulderHeightAt(lateral: number): number {
+  const a = Math.abs(lateral);
+  if (a <= 3.65) return 0.08 * (1 - a / 3.65);
+  if (a <= 4.4) return THREE.MathUtils.lerp(0, -0.07, (a - 3.65) / 0.75);
+  if (a <= 7.2) return THREE.MathUtils.lerp(-0.07, -0.34, (a - 4.4) / 2.8);
+  if (a <= 13) return THREE.MathUtils.lerp(-0.34, -0.55, (a - 7.2) / 5.8);
+  return -0.55 - Math.min(0.45, (a - 13) * 0.008);
+}
+
 export class RoutePath {
   /** Sliding window of stations, ascending by index. */
   readonly points: RoutePoint[] = [];
@@ -108,6 +118,14 @@ export class RoutePath {
     }
     out.set(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
     return { pos: out, heading: a.heading + (b.heading - a.heading) * t };
+  }
+
+  /** Surface height at an arbitrary distance and lateral offset from Route 17. */
+  groundHeightAt(distance: number, lateral: number): number {
+    const point = this.sample(distance);
+    return point.pos.y
+      + shoulderHeightAt(lateral)
+      + terrainAt(Math.floor(distance / STATION_SPACING), lateral, this.seed);
   }
 
   /** Floating origin: pull the whole route back towards zero. */

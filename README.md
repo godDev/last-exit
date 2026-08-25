@@ -61,13 +61,17 @@ npm run build
 | `[` `]` | tune down / up the band |
 | `T` | seek to the next station |
 | `H` | high beams |
-| `F` | air brakes |
+| `F` | air brakes in the cab; toggle flashlight while on foot |
 | `L` | switch language (EN / RU) |
 | `P` | autopilot — hands off the wheel, so you can just look |
-| `ESC` | pause |
+| `ESC` | pause; resume, return to the main menu with autosave, or restart |
 
 The development server additionally enables diagnostics, story jumps, mirror-state demos
 and cabin inspection controls. They are deliberately unavailable in the published build.
+
+The main menu offers a new shift, continuation from the autosave and authored checkpoints
+for every route act. Checkpoints establish the required prior story state before opening
+their scene.
 
 `C` is not a tourist feature. Everything in the cab is placed by its angle from the
 driver's eye at `(DRIVER_X, 2.05, -4.90)`, and placing it by eye from the driver's seat
@@ -91,8 +95,8 @@ to arrive that nobody transmitted.
 
 ## How it is built
 
-Vite + TypeScript + three.js. **No external assets at all**: every mesh is built in code,
-every texture is drawn on a `<canvas>` at run time, and every sound is synthesised through
+Vite + TypeScript + three.js. The route itself uses no third-party runtime assets: every mesh
+is built in code, every texture is drawn on a `<canvas>` at run time, and every sound is synthesised through
 WebAudio. Nothing is downloaded, nothing is licensed, and the signage can be made to say
 whatever the script needs it to say.
 

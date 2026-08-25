@@ -29,6 +29,13 @@ export const shared = {
   /** x = cos(inner angle), y = cos(outer angle). */
   uHeadCone: { value: new THREE.Vector2(0.985, 0.8) },
   uHeadIntensity: { value: 1.0 },
+  /** Separate handheld beam, so walking with a torch never turns off the coach lamps. */
+  uTorch: { value: new THREE.Vector3() },
+  uTorchDir: { value: new THREE.Vector3(0, 0, -1) },
+  uTorchColor: { value: new THREE.Color(0xffedc9) },
+  uTorchRange: { value: 27 },
+  uTorchCone: { value: new THREE.Vector2(0.984, 0.72) },
+  uTorchIntensity: { value: 0 },
   /** Virtual framebuffer the vertices snap to. */
   uSnapRes: { value: new THREE.Vector2(320, 240) },
   /** Warm glow bleeding back off the road into the cabin. */
@@ -85,6 +92,12 @@ const FRAG = /* glsl */ `
   uniform float uHeadRange;
   uniform vec2 uHeadCone;
   uniform float uHeadIntensity;
+  uniform vec3 uTorch;
+  uniform vec3 uTorchDir;
+  uniform vec3 uTorchColor;
+  uniform float uTorchRange;
+  uniform vec2 uTorchCone;
+  uniform float uTorchIntensity;
   uniform vec3 uCabinLight;
 
   uniform vec3 uColor;
@@ -131,6 +144,18 @@ const FRAG = /* glsl */ `
     float atten = clamp(1.0 - dist / uHeadRange, 0.0, 1.0);
     vec3 H = normalize(L + V);
     return pow(max(0.0, dot(N, H)), 28.0) * cone * atten * atten;
+  }
+
+  vec3 torchlight(vec3 N) {
+    if (uTorchIntensity <= 0.0) return vec3(0.0);
+    vec3 toLight = uTorch - vPosView;
+    float dist = length(toLight);
+    vec3 L = toLight / max(dist, 0.001);
+    float cone = smoothstep(uTorchCone.y, uTorchCone.x, dot(-L, uTorchDir));
+    float atten = clamp(1.0 - dist / uTorchRange, 0.0, 1.0);
+    atten *= atten;
+    float diff = dot(N, L) * 0.5 + 0.5;
+    return uTorchColor * cone * atten * diff * uTorchIntensity;
   }
 
   void main() {
@@ -205,6 +230,7 @@ const FRAG = /* glsl */ `
       light += uMoonColor * (dot(N, uMoonDir) * 0.5 + 0.5);
       light += headlight(uHeadL, N);
       light += headlight(uHeadR, N);
+      light += torchlight(N);
       light += uCabinLight * uCabin;
       vec3 lit = albedo * light;
       // Small, deliberately quantised highlights give windscreens, paint, wet asphalt and
@@ -303,6 +329,13 @@ export function updateHeadlights(
   shared.uHeadL.value.copy(_v.copy(leftWorld).applyMatrix4(view));
   shared.uHeadR.value.copy(_v.copy(rightWorld).applyMatrix4(view));
   shared.uHeadDir.value.copy(_v.copy(dirWorld).transformDirection(view).normalize());
+}
+
+/** Recompute the view-space handheld torch. Its intensity is zero when the torch is off. */
+export function updateTorch(camera: THREE.Camera, world: THREE.Vector3, direction: THREE.Vector3): void {
+  const view = camera.matrixWorldInverse;
+  shared.uTorch.value.copy(_v.copy(world).applyMatrix4(view));
+  shared.uTorchDir.value.copy(_v.copy(direction).transformDirection(view).normalize());
 }
 
 export function updateMoon(camera: THREE.Camera, dirWorld: THREE.Vector3): void {
