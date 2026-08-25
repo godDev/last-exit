@@ -218,8 +218,16 @@ export class Dashboard {
     // --- the moulded dash ---------------------------------------------------
     // Shallow and pushed forward: it ends 36 cm ahead of the wheel hub instead of
     // reaching back over it.
-    const cowl = new THREE.Mesh(new THREE.BoxGeometry(2.46, 0.06, 0.4), shell);
-    cowl.position.set(0, 1.71, DASH_Z);
+    // The cowl and the fascia below it are tilted in opposite directions to follow the
+    // dash's compound curve (see the eye-line angles at the top of this file). Built at
+    // their visible thickness alone, that opposite tilt opens a sliver of a gap right at
+    // the seam between them once the driver's free-look pitch strays from dead level —
+    // reading as a stray dark plane hanging in front of the gauges. The cowl is the
+    // farther of the two from the eye, so thickening it downward, well behind the
+    // fascia's visible face, closes that gap without changing anything the default,
+    // straight-ahead view shows.
+    const cowl = new THREE.Mesh(new THREE.BoxGeometry(2.46, 0.24, 0.4), shell);
+    cowl.position.set(0, 1.62, DASH_Z);
     cowl.rotation.x = -0.12;
 
     const fascia = new THREE.Mesh(new THREE.BoxGeometry(2.46, 0.42, 0.09), shell);
@@ -424,6 +432,7 @@ export class Dashboard {
 
     // --- the wheel --------------------------------------------------------------
     this.buildWheel(trim);
+    this.buildHands();
     this.wheel.position.set(driverX, WHEEL_Y, WHEEL_Z);
     // Perpendicular to the column. Getting this wrong by even twenty degrees makes the
     // wheel look stuck onto the dash rather than fitted to the shaft.
@@ -540,7 +549,7 @@ export class Dashboard {
     });
 
     const rim = new THREE.Mesh(
-      new THREE.TorusGeometry(WHEEL_RADIUS, 0.024, 8, 32),
+      new THREE.TorusGeometry(WHEEL_RADIUS, 0.024, 14, 32),
       rimMaterial,
     );
     this.wheel.add(rim);
@@ -590,6 +599,75 @@ export class Dashboard {
       holder.rotation.z = -(clockPosition / 12) * Math.PI * 2;
       this.wheel.add(holder);
     }
+  }
+
+  /**
+   * The driver's own hands, gripping the rim at ten and two. They live on `this.wheel`,
+   * so steering turns them with it exactly like the rest of the rim.
+   */
+  private buildHands(): void {
+    // Bare hands, not gloves: a warm, fairly light skin tone reads far better under the
+    // dome lamps than the near-black leather-brown this used to be, which just merged
+    // into one dark blob with the shadowed cabin behind it.
+    const skin = createRetroMaterial({ color: 0xcf9a78, fogScale: 0, ambientBoost: 2.9, cabin: 1.3, snap: 0.22 });
+    const skinShadow = createRetroMaterial({ color: 0xa06b4e, fogScale: 0, ambientBoost: 2.4, cabin: 1.05, snap: 0.28 });
+    const sleeve = createRetroMaterial({ color: 0x263038, fogScale: 0, ambientBoost: 2.1, cabin: 1.1, snap: 0.22 });
+
+    const addHand = (clockPosition: number, side: -1 | 1) => {
+      const theta = (clockPosition / 12) * Math.PI * 2;
+      const x = Math.sin(theta) * WHEEL_RADIUS;
+      const y = Math.cos(theta) * WHEEL_RADIUS;
+
+      const hand = new THREE.Group();
+      // Sat close enough to the rim's own centre that the fist actually hugs the tube
+      // instead of floating in front of it like a brick glued to the wheel face.
+      hand.position.set(x, y, 0.012);
+      // Matches the spoke convention above: this is what makes the fist's long axis lie
+      // tangent to the rim instead of pointing straight out from the hub.
+      hand.rotation.z = -theta;
+      this.wheel.add(hand);
+
+      // The back of the hand: one rounded capsule wrapping the rim, rather than the
+      // flat-sided brick with three cube "knuckles" this used to be. At driving distance
+      // a capsule alone reads as a fist far better than any amount of extra boxes did.
+      const fist = new THREE.Mesh(new THREE.CapsuleGeometry(0.032, 0.05, 3, 8), skin);
+      fist.rotation.z = Math.PI / 2;
+      fist.position.set(0, 0.002, 0.006);
+      hand.add(fist);
+
+      // A soft knuckle shadow on the crown of the fist suggests curled fingers without
+      // modelling each one. Kept shallow and hugging the surface so it reads as shading,
+      // not as a separate slab crossing the fist.
+      const groove = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.01, 0.006), skinShadow);
+      groove.position.set(0, 0.03, 0.016);
+      hand.add(groove);
+
+      // Thumb: a small rounded bump tucked flush against the fist, not a second rod at a
+      // right angle to it — a lone capsule here used to cross the fist's own axis and
+      // read as a plus sign instead of a hand. A sphere has no long axis to clash with,
+      // so it can only ever look like a knuckle, never a crossbar.
+      const thumb = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 6), skin);
+      thumb.scale.set(1, 0.85, 1.35);
+      thumb.position.set(side * 0.028, 0.006, 0.026);
+      hand.add(thumb);
+
+      // Wrist and a short stub of forearm, falling mostly downward toward the column and
+      // tapering to match the fist so the two read as one continuous limb instead of two
+      // sticks meeting at a point. Not back toward the eye: the driver's eye sits close
+      // along the wheel's own axis, so a cylinder aimed that way points almost straight
+      // at the lens, and perspective blows it up to fill the windscreen.
+      const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.036, 0.032, 8), sleeve);
+      cuff.rotation.x = 0.32;
+      cuff.position.set(0, -0.03, -0.002);
+      hand.add(cuff);
+      const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.044, 0.14, 8), sleeve);
+      forearm.rotation.x = 0.32;
+      forearm.position.set(0, -0.123, 0.01);
+      hand.add(forearm);
+    };
+
+    addHand(10, -1);
+    addHand(2, 1);
   }
 
   private buildGauge(

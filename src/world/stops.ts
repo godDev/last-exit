@@ -262,26 +262,97 @@ export class StoryStops implements Shiftable {
       root.add(mesh);
       return mesh;
     };
-    const addPerson = (position: THREE.Vector3, coat: number) => {
+    // A standing figure built from rounded capsules and spheres, in the same low-poly
+    // vocabulary as the seated passengers, rather than the two flat boxes this used to be.
+    const addPerson = (position: THREE.Vector3, coat: number, faceHeading = 0) => {
       const person = new THREE.Group();
-      const clothing = createRetroMaterial({ color: coat, ambientBoost: 3.5, snap: 0.45 });
-      const skin = createRetroMaterial({ color: 0x8a6a55, ambientBoost: 3.2, snap: 0.45 });
-      const body = new THREE.Mesh(new THREE.BoxGeometry(.42, .92, .25), clothing);
-      body.position.y = .76;
-      const head = new THREE.Mesh(new THREE.BoxGeometry(.23, .26, .22), skin);
-      head.position.y = 1.38;
-      person.add(body, head);
+      const clothing = createRetroMaterial({ color: coat, ambientBoost: 3.5, snap: 0.4 });
+      const skin = createRetroMaterial({ color: 0xc99a78, ambientBoost: 3.3, snap: 0.38 });
+      const hairColour = createRetroMaterial({ color: 0x241d17, ambientBoost: 2.6, snap: 0.4 });
+      const shoeColour = createRetroMaterial({ color: 0x18140f, ambientBoost: 2.3, snap: 0.42 });
+
+      // Tapered torso instead of a filing-cabinet box.
+      const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.19, 0.4, 3, 8), clothing);
+      torso.scale.set(1, 1, 0.75);
+      torso.position.y = 1.14;
+      person.add(torso);
+
+      // Arms hanging at the sides with a small bare hand at the end of each sleeve.
+      for (const side of [-1, 1]) {
+        const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.052, 0.4, 3, 6), clothing);
+        arm.position.set(side * 0.235, 0.98, 0.01);
+        arm.rotation.z = side * 0.06;
+        person.add(arm);
+        const hand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 7, 5), skin);
+        hand.position.set(side * 0.245, 0.72, 0.02);
+        person.add(hand);
+      }
+
+      // Legs and simple shoes.
+      for (const side of [-1, 1]) {
+        const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.52, 3, 6), clothing);
+        leg.position.set(side * 0.1, 0.4, 0);
+        person.add(leg);
+        const shoe = new THREE.Mesh(new THREE.SphereGeometry(0.078, 7, 4), shoeColour);
+        shoe.scale.set(1, 0.5, 1.6);
+        shoe.position.set(side * 0.1, 0.06, 0.05);
+        person.add(shoe);
+      }
+
+      // Head with a simple cap of hair.
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.125, 9, 7), skin);
+      head.scale.set(0.9, 1.05, 0.9);
+      head.position.y = 1.56;
+      person.add(head);
+      const hair = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 5, 0, Math.PI * 2, 0, Math.PI * 0.55), hairColour);
+      hair.position.set(0, 1.6, 0.01);
+      person.add(hair);
+
       person.position.copy(position);
+      person.rotation.y = faceHeading;
       root.add(person);
     };
 
     if (spec.id === 'mile86') {
+      const shelterLight = createRetroMaterial({ color: 0xffe2a0, mode: 'emissive', emissive: 1.75, snap: 0.3 });
+      const benchWood = createRetroMaterial({ color: 0x362c22, ambientBoost: 2.4, snap: 0.4 });
+      const metal = createRetroMaterial({ color: 0x2f3235, ambientBoost: 2.2, snap: 0.35 });
+      const windPanel = createRetroMaterial({
+        color: 0x263038, ambientBoost: 1.5, snap: 0.3, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide,
+      });
+
+      // Roof, posts and the slab the shelter actually stands on, rather than floating
+      // over bare sand like the prototype version did.
       addBox(new THREE.Vector3(4.2, 0.12, 1.5), new THREE.Vector3(-2.4, 2.25, 0));
       addBox(new THREE.Vector3(0.12, 2.2, 0.12), new THREE.Vector3(-4.2, 1.1, 0));
       addBox(new THREE.Vector3(0.12, 2.2, 0.12), new THREE.Vector3(-0.6, 1.1, 0));
-      addBox(new THREE.Vector3(2.1, 0.22, 0.5), new THREE.Vector3(-2.4, 0.55, 0.15), dark, {
+      addBox(new THREE.Vector3(4.6, 0.08, 1.9), new THREE.Vector3(-2.4, 0.04, 0), dark, undefined, false);
+
+      // A real fixture under the roof, not just the small signpost beacon: this is "the
+      // stop light" the radio calls out on approach, so it has to read from the road.
+      addBox(new THREE.Vector3(0.7, 0.05, 0.3), new THREE.Vector3(-2.4, 2.14, 0), shelterLight, undefined, false);
+
+      // Side wind panels close two sides of the shelter; the road-facing side stays open.
+      addBox(new THREE.Vector3(0.06, 1.85, 1.4), new THREE.Vector3(-4.2, 1.02, 0), windPanel, undefined, false);
+      addBox(new THREE.Vector3(0.06, 1.85, 1.4), new THREE.Vector3(-0.6, 1.02, 0), windPanel, undefined, false);
+      addBox(new THREE.Vector3(3.5, 1.85, 0.06), new THREE.Vector3(-2.4, 1.02, -0.72), windPanel, undefined, false);
+
+      // Wall-mounted timetable, faded but still the evidence the driver needs.
+      addBox(new THREE.Vector3(1.3, 0.5, 0.06), new THREE.Vector3(-3.4, 1.35, -0.68), dark, {
         id: 'mile86.timetable', title: 'FADED ROUTE 17 TIMETABLE',
       });
+
+      // An actual bench to wait on, rather than a slab standing in for one.
+      const seat = addBox(new THREE.Vector3(2.0, 0.08, 0.42), new THREE.Vector3(-2.4, 0.48, 0.15), benchWood);
+      seat.userData.walkCollider = true;
+      const backrest = addBox(new THREE.Vector3(2.0, 0.4, 0.06), new THREE.Vector3(-2.4, 0.68, 0.35), benchWood);
+      backrest.userData.walkCollider = true;
+      for (const x of [-3.2, -1.6]) addBox(new THREE.Vector3(0.06, 0.42, 0.36), new THREE.Vector3(x, 0.24, 0.15), metal);
+
+      // A trash bin outside the shelter footprint gives the stop a lived-in edge.
+      addBox(new THREE.Vector3(0.36, 0.62, 0.36), new THREE.Vector3(-4.55, 0.31, 1.05), metal);
+      addBox(new THREE.Vector3(0.4, 0.05, 0.4), new THREE.Vector3(-4.55, 0.63, 1.05), metal, undefined, false);
+
       // The player must see the girl before deciding whether she is real.
       addPerson(new THREE.Vector3(-1.2, 0, -1.35), 0x5b4248);
     } else if (spec.id === 'closed-gas') {

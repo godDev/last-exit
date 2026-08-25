@@ -58,7 +58,7 @@ export class Interactions {
 
     // The zone is a generous circle centred on the door. The old 13 m radius could be
     // reached before some scenery had been inspected and felt like movement had broken.
-    const door = bus.localToWorld(2.05, 0, -4.7);
+    const door = bus.localToWorld(2.05, 0, 4.7);
     const delta = this.position.clone().sub(door).setY(0);
     if (delta.length() > 28) this.position.copy(door).addScaledVector(delta.normalize(), 28);
 
@@ -142,7 +142,7 @@ export class Interactions {
     this.onFoot = true;
     this.flashlightOn = false;
     this.activeStop = stop;
-    const door = bus.localToWorld(2.3, 0.05, -4.7);
+    const door = bus.localToWorld(2.3, 0.05, 4.7);
     this.position.copy(door).add(new THREE.Vector3(0, 1.68, 0));
     this.lookYaw = bus.heading;
     this.lookPitch = 0;

@@ -6,6 +6,7 @@ import type { StationHost } from './stations/station';
 import { CountryStation } from './stations/music';
 import { TalkStation } from './stations/talk';
 import { NumbersStation } from './stations/numbers';
+import { LiveStation } from './stations/live';
 import { SCRIPTS } from '../content/radioScripts';
 import { fbm1 } from '../core/rng';
 
@@ -113,6 +114,21 @@ export class Radio implements StationHost {
         gain: 0.9,
       }),
       new NumbersStation(this, SCRIPTS.numbers),
+      // Two real, currently-broadcasting internet radio streams, tuned in like anything
+      // else on the band. Unlike every station above, this is somebody else's actual
+      // signal fetched over the network — see LiveStation for why that has to fail quietly.
+      new LiveStation(this, {
+        id: 'live-country',
+        callsign: 'KHWY 720 · COUNTRY',
+        frequency: 720,
+        url: 'https://listen.181fm.com/181-80scountry_128k.mp3',
+      }),
+      new LiveStation(this, {
+        id: 'live-gold',
+        callsign: 'GOLD 1000 · OLDIES',
+        frequency: 1000,
+        url: 'https://media-ssl.musicradio.com/GoldMP3',
+      }),
     );
   }
 

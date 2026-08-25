@@ -126,13 +126,55 @@ function buildFenceSection(): THREE.BufferGeometry {
 }
 
 function buildSaguaro(): THREE.BufferGeometry {
-  const parts = [at(tint(new THREE.CylinderGeometry(0.26, 0.34, 4.2, 6), 0x23301c), 0, 2.1, 0)];
-  const armL = at(tint(new THREE.CylinderGeometry(0.16, 0.19, 1.5, 5), 0x23301c), -0.55, 2.6, 0);
-  armL.rotateZ(0.55);
-  const armLup = at(tint(new THREE.CylinderGeometry(0.15, 0.16, 1.2, 5), 0x23301c), -0.95, 3.4, 0);
-  const armR = at(tint(new THREE.CylinderGeometry(0.15, 0.18, 1.1, 5), 0x23301c), 0.5, 3.1, 0);
-  armR.rotateZ(-0.6);
-  parts.push(armL, armLup, armR);
+  const colour = 0x2c3f24;
+  const trunkHeight = 4.2;
+  const trunkTopRadius = 0.25;
+  const parts: THREE.BufferGeometry[] = [
+    at(tint(new THREE.CylinderGeometry(trunkTopRadius, 0.32, trunkHeight, 8), colour), 0, trunkHeight / 2, 0),
+    // A domed cap keeps the trunk from ending in an obviously flat, cut-off cylinder top.
+    at(tint(new THREE.SphereGeometry(trunkTopRadius, 8, 5, 0, Math.PI * 2, 0, Math.PI * 0.5), colour), 0, trunkHeight, 0),
+  ];
+
+  // Each arm is an elbow that leans out from the trunk, then a tip that curves most of
+  // the way back to vertical. Both segments are built at the origin, rotated, and only
+  // then translated into place — rotating a cylinder that had already been translated
+  // away from the origin used to spin the whole arm around the plant's root instead of
+  // tilting it, flinging it off to the side and leaving it looking disconnected.
+  const addArm = (
+    side: -1 | 1,
+    attachHeight: number,
+    lean: number,
+    elbowLength: number,
+    tipLength: number,
+  ): THREE.BufferGeometry[] => {
+    const attachX = side * 0.24;
+    const elbowAngle = -side * lean;
+
+    const elbow = tint(new THREE.CylinderGeometry(0.1, 0.14, elbowLength, 6), colour);
+    elbow.translate(0, elbowLength / 2, 0); // pivot at the elbow's own base
+    elbow.rotateZ(elbowAngle);
+    elbow.translate(attachX, attachHeight, 0); // then place that base on the trunk
+
+    // The tip starts exactly where the elbow ends, computed from the same rotation
+    // rather than a second, unrelated offset that could drift apart from it.
+    const tipBaseX = attachX - Math.sin(elbowAngle) * elbowLength;
+    const tipBaseY = attachHeight + Math.cos(elbowAngle) * elbowLength;
+    const tipAngle = elbowAngle * 0.3;
+
+    const tip = tint(new THREE.CylinderGeometry(0.09, 0.11, tipLength, 6), colour);
+    tip.translate(0, tipLength / 2, 0);
+    tip.rotateZ(tipAngle);
+    tip.translate(tipBaseX, tipBaseY, 0);
+
+    const capX = tipBaseX - Math.sin(tipAngle) * tipLength;
+    const capY = tipBaseY + Math.cos(tipAngle) * tipLength;
+    const cap = at(tint(new THREE.SphereGeometry(0.095, 6, 4), colour), capX, capY, 0);
+
+    return [elbow, tip, cap];
+  };
+
+  parts.push(...addArm(-1, 2.15, 0.62, 1.25, 1.05));
+  parts.push(...addArm(1, 1.7, 0.58, 1.05, 1.2));
   return merge(parts, 'saguaro');
 }
 
@@ -372,8 +414,11 @@ export class PropField {
         wanted.add(`mile|${i}|0`);
       }
 
-      // occasional signage
-      if (hash1(i, this.seed + 909) > 0.965) wanted.add(`sign|${i}|0`);
+      // Occasional signage. Held back until dispatch has already named Mile 86 (see
+      // mile86.warning in main.ts), so a background highway sign is never the player's
+      // first hint of the number the dispatcher is about to say.
+      const signMile = (d0 - this.mileZero) / METRES_PER_MILE;
+      if (signMile > STORY_MILES.mile86 - 0.94 && hash1(i, this.seed + 909) > 0.965) wanted.add(`sign|${i}|0`);
     }
 
     // retire everything that fell out of range
