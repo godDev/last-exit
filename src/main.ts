@@ -484,6 +484,7 @@ const torchDirection = new THREE.Vector3(0, 0, -1);
 const cabinLightPosition = new THREE.Vector3();
 const collisionProbe = new THREE.Vector3();
 const downwardLookOffset = new THREE.Vector3();
+const driverReachHeadOffset = new THREE.Vector3();
 const headEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 const headQuat = new THREE.Quaternion();
 
@@ -525,6 +526,13 @@ function placeCamera(dt: number): void {
   glance += (wantGlance - glance) * Math.min(1, dt * 9);
 
   camera.position.copy(cabin.eye(eye, bus.heave));
+
+  // The camera is the driver's head. When the body reaches for the radio it follows the
+  // shoulders slightly, so the player never watches a headless torso lean away below.
+  const bodyLean = cabin.dashboard.firstPersonBodyLean;
+  driverReachHeadOffset.set(bodyLean * 0.018, bodyLean * -0.025, bodyLean * -0.1);
+  driverReachHeadOffset.applyQuaternion(cabin.group.quaternion);
+  camera.position.add(driverReachHeadOffset);
 
   // a glance to the right is a negative yaw, because +Y rotation turns the view left
   const freeYaw = THREE.MathUtils.lerp(mouseYaw - lookX * 0.85, leftMirrorLook.yaw, leftMirrorGlance);
@@ -669,8 +677,8 @@ input.on('inspect', () => {
     camera.updateProjectionMatrix();
   }
 });
-input.on('radioPower', () => { radio?.togglePower(); });
-input.on('radioSeek', () => { radio?.seek(); });
+input.on('radioPower', () => { cabin.dashboard.requestRadioPower(); });
+input.on('radioSeek', () => { cabin.dashboard.requestRadioSeek(1); });
 input.on('horn', () => {
   if (!interactions.onFoot) {
     engineAudio?.hiss(0.45, 0.18);
@@ -961,6 +969,9 @@ const loop = new Loop((dt, elapsed) => {
   cabin.leftMirror.mesh.visible = leftMirrorGlance > 0.01 || input.isDown('lookLeft') || leftMirrorLatched;
   if (choices.active || endingScreen.visible) hud.prompt(null);
   else interactions.update(dt, bus, input);
+  // The arms, torso and legs are the player character, not a second seated NPC.
+  // Hide them for every on-foot mission and restore them on re-entry to the coach.
+  cabin.dashboard.setDriverVisible(!interactions.onFoot);
   cabin.updateExterior(dt);
   placeCamera(dt);
   // The desert is still a moonlit outdoor space, not a black void. The torch is for
@@ -983,15 +994,10 @@ const loop = new Loop((dt, elapsed) => {
   // deliberate low-light lift rather than pretending rear headlights exist.
   cabin.leftMirror.setBrightness(3.6);
 
-  if (radio) {
-    radio.tune(input.axis('radioDown', 'radioUp'), dt);
-    radio.update(dt);
-    cabin.dashboard.setRadio(radio.needle, radio.readout, radio.power);
-  }
   engineAudio?.update(dt, bus);
 
   roster.update(elapsed, -bus.yawRate * bus.speed * 0.02);
-  cabin.dashboard.update({
+  const dashboardActions = cabin.dashboard.update({
     dt,
     speedMph: bus.speedMph,
     signedSpeed: bus.speed,
@@ -1003,7 +1009,15 @@ const loop = new Loop((dt, elapsed) => {
     miles: bus.miles,
     clock: clock.format(),
     highBeam: bus.highBeam,
+    radioTuneDirection: input.axis('radioDown', 'radioUp'),
   });
+  if (radio) {
+    if (dashboardActions.radioPowerPress) radio.togglePower();
+    if (dashboardActions.radioSeekDirection !== 0) radio.seek(dashboardActions.radioSeekDirection);
+    radio.tune(dashboardActions.radioTuneDirection, dt);
+    radio.update(dt);
+    cabin.dashboard.setRadio(radio.needle, radio.readout, radio.power);
+  }
 
   // Headlights sit on the body, aimed slightly down, and never follow the steering.
   bus.localToWorld(-1.02, 0.95, 6.1, headL);

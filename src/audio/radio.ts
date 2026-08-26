@@ -150,10 +150,12 @@ export class Radio implements StationHost {
     this.dial = Math.min(BAND_MAX, Math.max(BAND_MIN, this.dial + direction * TUNE_RATE * dt));
   }
 
-  /** Jump to the next station up the band, wrapping at the top. */
-  seek(): void {
+  /** Jump to the next station in either direction, wrapping at the band edge. */
+  seek(direction = 1): void {
     const sorted = [...this.stations].sort((a, b) => a.frequency - b.frequency);
-    const next = sorted.find((s) => s.frequency > this.dial + 2) ?? sorted[0];
+    const next = direction >= 0
+      ? sorted.find((s) => s.frequency > this.dial + 2) ?? sorted[0]
+      : [...sorted].reverse().find((s) => s.frequency < this.dial - 2) ?? sorted[sorted.length - 1];
     this.dial = next.frequency;
   }
 

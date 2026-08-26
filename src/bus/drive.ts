@@ -28,7 +28,7 @@ const DRAG = 0.00055;
 const MAX_CURVATURE = 0.022;
 const MAX_LATERAL_G = 3.4;      // m/s^2 before the coach protests
 
-const WHEEL_RATE = 1.7;         // how fast the driver can wind the wheel, turns/s
+const WHEEL_RATE = 1.25;        // deliberate coach steering instead of an instant flick
 const WHEEL_RETURN = 1.25;      // self-centring
 
 // Geared so that top at a 55 mph cruise sits around 1800 rpm, where a coach actually runs

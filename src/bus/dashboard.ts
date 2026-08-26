@@ -38,6 +38,12 @@ const COLUMN_TILT = 0.588;
 /** Rake of the instrument pod, shared by the gauges, the clock and the radio. */
 const POD_TILT = 0.42;
 
+export interface DashboardActions {
+  radioPowerPress: boolean;
+  radioSeekDirection: number;
+  radioTuneDirection: number;
+}
+
 /**
  * The pod's own axes in cabin space. The gauge faces look along +normal; anything meant to
  * sit behind them has to be offset along -normal, which is the mistake worth naming: a
@@ -197,6 +203,10 @@ export class Dashboard {
   private readonly dialWidth = 0.29;
   private readonly stalk = new THREE.Group();
   private readonly gearStick = new THREE.Group();
+  private readonly radioPowerButton = new THREE.Mesh();
+  private readonly radioTuneKnob = new THREE.Group();
+  private readonly radioPowerHandTarget = new THREE.Object3D();
+  private readonly radioTuneHandTarget = new THREE.Object3D();
   private readonly clutchPedal = new THREE.Group();
   private readonly brakePedal = new THREE.Group();
   private readonly acceleratorPedal = new THREE.Group();
@@ -208,13 +218,69 @@ export class Dashboard {
   private readonly rightThigh = new THREE.Mesh();
   private readonly rightShin = new THREE.Mesh();
   private readonly rightKnee = new THREE.Mesh();
+  private readonly torso = new THREE.Group();
+  private readonly leftShoulderAnchor = new THREE.Object3D();
+  private readonly rightShoulderAnchor = new THREE.Object3D();
+  private readonly leftUpperArm = new THREE.Mesh();
+  private readonly leftForearm = new THREE.Mesh();
+  private readonly rightUpperArm = new THREE.Mesh();
+  private readonly rightForearm = new THREE.Mesh();
+  private readonly leftElbowJoint = new THREE.Mesh();
+  private readonly rightElbowJoint = new THREE.Mesh();
+  private readonly leftHand = new THREE.Group();
+  private readonly rightHand = new THREE.Group();
+  private readonly rightCuff = new THREE.Mesh();
+  private readonly gearHandTarget = new THREE.Object3D();
   private readonly legFrom = new THREE.Vector3();
   private readonly legTo = new THREE.Vector3();
   private readonly legMid = new THREE.Vector3();
   private readonly legDirection = new THREE.Vector3();
   private readonly legUp = new THREE.Vector3(0, 1, 0);
+  private readonly armUp = new THREE.Vector3(0, 1, 0);
+  private readonly leftShoulder = new THREE.Vector3();
+  private readonly rightShoulder = new THREE.Vector3();
+  private readonly leftElbow = new THREE.Vector3();
+  private readonly rightElbow = new THREE.Vector3();
+  private readonly leftGrip = new THREE.Vector3();
+  private readonly rightGrip = new THREE.Vector3();
+  private readonly gearGrip = new THREE.Vector3();
+  private readonly radioGrip = new THREE.Vector3();
+  private readonly shiftElbow = new THREE.Vector3();
+  private readonly radioElbow = new THREE.Vector3();
+  private readonly armDirection = new THREE.Vector3();
+  private readonly armElbowBase = new THREE.Vector3();
+  private readonly armBendDirection = new THREE.Vector3();
+  private readonly gearHandDirection = new THREE.Vector3(0, -1, -0.18).normalize();
+  private readonly gearHandQuaternion = new THREE.Quaternion();
+  private readonly wheelGripLeft = new THREE.Vector3();
+  private readonly wheelGripRight = new THREE.Vector3();
+  private readonly leftWheelTarget = new THREE.Vector3();
+  private readonly rightWheelTarget = new THREE.Vector3();
+  private readonly leftFingerJoints: THREE.Group[] = [];
+  private readonly rightFingerJoints: THREE.Group[] = [];
+  private readonly leftThumbJoints: THREE.Group[] = [];
+  private readonly rightThumbJoints: THREE.Group[] = [];
   private lastGear: number | 'R' | null = null;
+  private lastMoving = false;
   private clutchTime = 0;
+  private shiftHandTime = 0;
+  private readonly shiftHandDuration = 0.92;
+  private radioMode: 'idle' | 'power' | 'tune' | 'seek' = 'idle';
+  private radioPhase: 'reach' | 'operate' | 'return' = 'reach';
+  private radioPhaseTime = 0;
+  private radioHandBlend = 0;
+  private radioBodyLean = 0;
+  private radioDirection = 0;
+  private radioMinimumTuneTime = 0;
+  private pendingRadioPower = 0;
+  private pendingRadioSeek = 0;
+  private readonly dashboardActions: DashboardActions = {
+    radioPowerPress: false,
+    radioSeekDirection: 0,
+    radioTuneDirection: 0,
+  };
+
+  private driverVisible = true;
 
   constructor(private readonly driverX: number) {
     // Dark, but with enough value separation for the moulded layers to remain legible
@@ -405,12 +471,34 @@ export class Dashboard {
     this.dialNeedle.position.z = 0.005;
     radio.add(this.dialNeedle);
 
-    for (const side of [-1, 1]) {
-      const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.032, 8), trim);
-      knob.rotation.x = Math.PI / 2;
-      knob.position.set(side * (this.dialWidth / 2 + 0.042), 0, 0.01);
-      radio.add(knob);
-    }
+    const radioControlX = this.dialWidth / 2 + 0.042;
+    const powerBezel = new THREE.Mesh(
+      new THREE.TorusGeometry(0.019, 0.004, 6, 14),
+      createRetroMaterial({ color: 0x665e52, fogScale: 0, ambientBoost: 2.25, cabin: 1, snap: 0.16 }),
+    );
+    powerBezel.position.set(-radioControlX, 0, 0.012);
+    radio.add(powerBezel);
+    this.radioPowerButton.geometry = new THREE.CylinderGeometry(0.014, 0.014, 0.019, 10);
+    this.radioPowerButton.material = createRetroMaterial({ color: 0x9d4b35, fogScale: 0, ambientBoost: 2.5, cabin: 1.08, snap: 0.14 });
+    this.radioPowerButton.rotation.x = Math.PI / 2;
+    this.radioPowerButton.position.set(-radioControlX, 0, 0.02);
+    radio.add(this.radioPowerButton);
+    this.radioPowerHandTarget.position.set(-radioControlX, 0, 0.065);
+    radio.add(this.radioPowerHandTarget);
+
+    this.radioTuneKnob.position.set(radioControlX, 0, 0.018);
+    const tuneKnobBody = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.034, 12), trim);
+    tuneKnobBody.rotation.x = Math.PI / 2;
+    this.radioTuneKnob.add(tuneKnobBody);
+    const tuneMarker = new THREE.Mesh(
+      new THREE.BoxGeometry(0.005, 0.017, 0.006),
+      createRetroMaterial({ color: 0xd3c4a4, fogScale: 0, ambientBoost: 2.5, cabin: 1.1, snap: 0.12 }),
+    );
+    tuneMarker.position.set(0, 0.012, 0.02);
+    this.radioTuneKnob.add(tuneMarker);
+    radio.add(this.radioTuneKnob);
+    this.radioTuneHandTarget.position.set(radioControlX, 0, 0.072);
+    radio.add(this.radioTuneHandTarget);
 
     // a row of rocker switches, because a dash with nothing on it reads as a prop
     for (let i = 0; i < 5; i++) {
@@ -563,6 +651,11 @@ export class Dashboard {
     capBezel.position.set(0, 0.644, -0.11);
     this.gearStick.add(capBezel);
 
+    // The palm target sits above the cap, not inside the knob. It follows every movement
+    // through the H-pattern while the curled fingers wrap down around the sides.
+    this.gearHandTarget.position.set(0, 0.705, -0.11);
+    this.gearStick.add(this.gearHandTarget);
+
     gearLever.add(this.gearStick);
 
     this.group.add(gearLever);
@@ -690,6 +783,8 @@ export class Dashboard {
     fareBox.add(fareBody, fareTop, slot);
     this.group.add(fareBox);
 
+    this.poseDriverUpperBody(0);
+
     // the whole binnacle belongs to the driver's eyes, not to the mirror
     this.group.traverse((child) => child.layers.set(LAYER_DIRECT_ONLY));
   }
@@ -795,73 +890,334 @@ export class Dashboard {
     }
   }
 
-  /**
-   * The driver's own hands, gripping the rim at ten and two. They live on `this.wheel`,
-   * so steering turns them with it exactly like the rest of the rim.
-   */
+  /** Builds a continuous first-person driver: torso, articulated sleeves and hands. */
   private buildHands(): void {
-    // Bare hands, not gloves: a warm, fairly light skin tone reads far better under the
-    // dome lamps than the near-black leather-brown this used to be, which just merged
-    // into one dark blob with the shadowed cabin behind it.
-    const skin = createRetroMaterial({ color: 0xcf9a78, fogScale: 0, ambientBoost: 2.9, cabin: 1.3, snap: 0.22 });
-    const skinShadow = createRetroMaterial({ color: 0xa06b4e, fogScale: 0, ambientBoost: 2.4, cabin: 1.05, snap: 0.28 });
-    const sleeve = createRetroMaterial({ color: 0x263038, fogScale: 0, ambientBoost: 2.1, cabin: 1.1, snap: 0.22 });
+    const skin = createRetroMaterial({ color: 0xae7658, fogScale: 0, ambientBoost: 2.45, cabin: 1.12, snap: 0.2 });
+    const jacket = createRetroMaterial({ color: 0x354149, fogScale: 0, ambientBoost: 2.35, cabin: 1.12, roughness: 0.94, snap: 0.18 });
+    const jacketFade = createRetroMaterial({ color: 0x4d5a62, fogScale: 0, ambientBoost: 2.4, cabin: 1.15, roughness: 0.96, snap: 0.16 });
+    const jacketSeam = createRetroMaterial({ color: 0x1d252a, fogScale: 0, ambientBoost: 2, cabin: 0.96, snap: 0.22 });
+    const torsoFabric = new THREE.MeshBasicMaterial({ color: 0x344148, fog: false });
 
-    const addHand = (clockPosition: number, side: -1 | 1) => {
-      const theta = (clockPosition / 12) * Math.PI * 2;
-      const x = Math.sin(theta) * WHEEL_RADIUS;
-      const y = Math.cos(theta) * WHEEL_RADIUS;
+    // The chest stays below and behind the eye plane. It is visible when looking down,
+    // but never intersects the first-person camera or covers the windscreen.
+    // The torso group pivots from the driver's waist. This lets the whole upper body
+    // lean toward distant controls instead of making either sleeve grow longer.
+    this.torso.position.set(this.driverX, 1.15, -4.78);
+    const chest = new THREE.Mesh(new THREE.CapsuleGeometry(0.24, 0.28, 5, 12), torsoFabric);
+    chest.scale.set(1.28, 1, 0.58);
+    chest.position.set(0, 0.24, -0.12);
+    const shoulders = new THREE.Mesh(new THREE.CapsuleGeometry(0.115, 0.42, 4, 10), jacket);
+    shoulders.rotation.z = Math.PI / 2;
+    shoulders.scale.z = 0.72;
+    shoulders.position.set(0, 0.52, -0.04);
+    const zip = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.31, 0.012), jacketSeam);
+    zip.position.set(0, 0.31, -0.265);
+    this.leftShoulderAnchor.position.set(-0.27, 0.52, -0.05);
+    this.rightShoulderAnchor.position.set(0.27, 0.52, -0.05);
+    this.torso.add(chest, shoulders, zip, this.leftShoulderAnchor, this.rightShoulderAnchor);
+    this.group.add(this.torso);
 
-      const hand = new THREE.Group();
-      // Sat close enough to the rim's own centre that the fist actually hugs the tube
-      // instead of floating in front of it like a brick glued to the wheel face.
-      hand.position.set(x, y, 0.012);
-      // Matches the spoke convention above: this is what makes the fist's long axis lie
-      // tangent to the rim instead of pointing straight out from the hub.
-      hand.rotation.z = -theta;
-      this.wheel.add(hand);
-
-      // The back of the hand: one rounded capsule wrapping the rim, rather than the
-      // flat-sided brick with three cube "knuckles" this used to be. At driving distance
-      // a capsule alone reads as a fist far better than any amount of extra boxes did.
-      const fist = new THREE.Mesh(new THREE.CapsuleGeometry(0.032, 0.05, 3, 8), skin);
-      fist.rotation.z = Math.PI / 2;
-      fist.position.set(0, 0.002, 0.006);
-      hand.add(fist);
-
-      // A soft knuckle shadow on the crown of the fist suggests curled fingers without
-      // modelling each one. Kept shallow and hugging the surface so it reads as shading,
-      // not as a separate slab crossing the fist.
-      const groove = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.01, 0.006), skinShadow);
-      groove.position.set(0, 0.03, 0.016);
-      hand.add(groove);
-
-      // Thumb: a small rounded bump tucked flush against the fist, not a second rod at a
-      // right angle to it — a lone capsule here used to cross the fist's own axis and
-      // read as a plus sign instead of a hand. A sphere has no long axis to clash with,
-      // so it can only ever look like a knuckle, never a crossbar.
-      const thumb = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 6), skin);
-      thumb.scale.set(1, 0.85, 1.35);
-      thumb.position.set(side * 0.028, 0.006, 0.026);
-      hand.add(thumb);
-
-      // Wrist and a short stub of forearm, falling mostly downward toward the column and
-      // tapering to match the fist so the two read as one continuous limb instead of two
-      // sticks meeting at a point. Not back toward the eye: the driver's eye sits close
-      // along the wheel's own axis, so a cylinder aimed that way points almost straight
-      // at the lens, and perspective blows it up to fill the windscreen.
-      const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.036, 0.032, 8), sleeve);
-      cuff.rotation.x = 0.32;
-      cuff.position.set(0, -0.03, -0.002);
-      hand.add(cuff);
-      const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.044, 0.14, 8), sleeve);
-      forearm.rotation.x = 0.32;
-      forearm.position.set(0, -0.123, 0.01);
-      hand.add(forearm);
+    const configureSleeve = (upper: THREE.Mesh, forearm: THREE.Mesh, elbow: THREE.Mesh): void => {
+      upper.geometry = new THREE.CylinderGeometry(0.052, 0.068, 1, 10);
+      upper.material = jacket;
+      forearm.geometry = new THREE.CylinderGeometry(0.042, 0.054, 1, 10);
+      forearm.material = jacket;
+      elbow.geometry = new THREE.SphereGeometry(0.06, 10, 7);
+      elbow.material = jacketFade;
+      elbow.scale.set(1, 0.9, 1);
+      this.group.add(upper, forearm, elbow);
     };
+    configureSleeve(this.leftUpperArm, this.leftForearm, this.leftElbowJoint);
+    configureSleeve(this.rightUpperArm, this.rightForearm, this.rightElbowJoint);
 
-    addHand(10, -1);
-    addHand(2, 1);
+    const makeHand = (hand: THREE.Group, side: -1 | 1): void => {
+      const fingerJoints = side < 0 ? this.leftFingerJoints : this.rightFingerJoints;
+      const thumbJoints = side < 0 ? this.leftThumbJoints : this.rightThumbJoints;
+      const palm = new THREE.Mesh(new THREE.CapsuleGeometry(0.029, 0.047, 4, 10), skin);
+      palm.scale.set(1.12, 1, 0.72);
+      palm.position.y = -0.003;
+
+      // Four separate two-bone fingers. Their distal joints curl behind the rim while
+      // gripping and unfold during a hand-over-hand transfer.
+      for (let finger = 0; finger < 4; finger++) {
+        const root = new THREE.Group();
+        root.position.set((finger - 1.5) * 0.015, 0.032 + Math.abs(finger - 1.5) * -0.003, 0);
+        root.rotation.x = -0.12;
+        const proximal = new THREE.Mesh(new THREE.CapsuleGeometry(0.0078, 0.02, 3, 7), skin);
+        proximal.position.y = 0.014;
+        const distalJoint = new THREE.Group();
+        distalJoint.position.y = 0.033;
+        distalJoint.rotation.x = -1.02;
+        const distal = new THREE.Mesh(new THREE.CapsuleGeometry(0.0072, 0.018, 3, 7), skin);
+        distal.position.y = 0.012;
+        distalJoint.add(distal);
+        root.add(proximal, distalJoint);
+        hand.add(root);
+        fingerJoints.push(distalJoint);
+      }
+
+      // The thumb uses the same skin material as the rest of the hand; the old dark
+      // thumb was the brown patch that looked pasted onto each fist.
+      const thumbRoot = new THREE.Group();
+      thumbRoot.position.set(side * 0.026, -0.002, 0.006);
+      thumbRoot.rotation.z = side * 0.92;
+      const thumbBase = new THREE.Mesh(new THREE.CapsuleGeometry(0.008, 0.014, 3, 7), skin);
+      thumbBase.position.y = 0.011;
+      const thumbTipJoint = new THREE.Group();
+      thumbTipJoint.position.y = 0.024;
+      thumbTipJoint.rotation.x = -0.62;
+      const thumbTip = new THREE.Mesh(new THREE.CapsuleGeometry(0.0072, 0.011, 3, 7), skin);
+      thumbTip.position.y = 0.008;
+      thumbTipJoint.add(thumbTip);
+      thumbRoot.add(thumbBase, thumbTipJoint);
+      hand.add(thumbRoot);
+      thumbJoints.push(thumbTipJoint);
+
+      const cuff = side > 0 ? this.rightCuff : new THREE.Mesh();
+      cuff.geometry = new THREE.CylinderGeometry(0.041, 0.046, 0.055, 9);
+      cuff.material = jacketFade;
+      cuff.position.y = -0.065;
+      hand.add(palm, cuff);
+      this.group.add(hand);
+    };
+    makeHand(this.leftHand, -1);
+    makeHand(this.rightHand, 1);
+
+    const gripAt = (clockPosition: number, target: THREE.Vector3): void => {
+      const theta = (clockPosition / 12) * Math.PI * 2;
+      target.set(Math.sin(theta) * WHEEL_RADIUS, Math.cos(theta) * WHEEL_RADIUS, 0.035);
+    };
+    gripAt(9.75, this.wheelGripLeft);
+    gripAt(2.25, this.wheelGripRight);
+  }
+
+  private poseDriverUpperBody(shiftBlend: number): void {
+    // Reaching the radio starts at the waist and shoulder. The head/camera follows a
+    // smaller version of this motion in main.ts, preserving a true first-person view.
+    this.radioBodyLean = this.radioHandBlend * (1 - shiftBlend);
+    this.torso.rotation.x = -0.42 * this.radioBodyLean;
+    this.torso.rotation.y = 0.1 * this.radioBodyLean;
+    this.rightShoulderAnchor.position.x = 0.27 + 0.018 * this.radioBodyLean;
+    this.rightShoulderAnchor.position.z = -0.05 - 0.055 * this.radioBodyLean;
+    this.torso.updateMatrixWorld(true);
+    this.leftShoulderAnchor.getWorldPosition(this.leftShoulder);
+    this.group.worldToLocal(this.leftShoulder);
+    this.rightShoulderAnchor.getWorldPosition(this.rightShoulder);
+    this.group.worldToLocal(this.rightShoulder);
+
+    const steering = this.wheel.rotation.z;
+    const eased = (from: number, to: number, value: number): number => {
+      const t = THREE.MathUtils.clamp((value - from) / (to - from), 0, 1);
+      return t * t * (3 - 2 * t);
+    };
+    // On a left turn the left hand transfers first and the right follows near full lock;
+    // a right turn mirrors the sequence. New local angles are fixed once caught, so the
+    // regripped hand resumes rotating with the wheel instead of hovering in screen space.
+    const leftTransfer = steering >= 0
+      ? eased(0.9, 1.55, steering)
+      : eased(1.55, 1.95, -steering);
+    const rightTransfer = steering <= 0
+      ? eased(0.9, 1.55, -steering)
+      : eased(1.55, 1.95, steering);
+    const leftTargetAngle = steering >= 0 ? 2.45 : -3.6;
+    const rightTargetAngle = steering <= 0 ? -2.45 : 3.6;
+    this.leftWheelTarget.set(
+      Math.sin(leftTargetAngle) * WHEEL_RADIUS,
+      Math.cos(leftTargetAngle) * WHEEL_RADIUS,
+      0.035,
+    );
+    this.rightWheelTarget.set(
+      Math.sin(rightTargetAngle) * WHEEL_RADIUS,
+      Math.cos(rightTargetAngle) * WHEEL_RADIUS,
+      0.035,
+    );
+    this.leftGrip.lerpVectors(this.wheelGripLeft, this.leftWheelTarget, leftTransfer);
+    this.rightGrip.lerpVectors(this.wheelGripRight, this.rightWheelTarget, rightTransfer);
+    // Hands cross the chord above the spokes rather than sliding around the leather.
+    this.leftGrip.z += Math.sin(leftTransfer * Math.PI) * 0.085;
+    this.rightGrip.z += Math.sin(rightTransfer * Math.PI) * 0.085;
+
+    // Grip points are in wheel space, so rotation about both the tilted column and the
+    // steering axis is inherited exactly after the transfer has been calculated.
+    this.wheel.localToWorld(this.leftGrip);
+    this.group.worldToLocal(this.leftGrip);
+    this.wheel.localToWorld(this.rightGrip);
+    this.group.worldToLocal(this.rightGrip);
+
+    if (this.radioMode !== 'idle' && this.radioHandBlend > 0) {
+      const radioTarget = this.radioMode === 'power'
+        ? this.radioPowerHandTarget
+        : this.radioTuneHandTarget;
+      radioTarget.getWorldPosition(this.radioGrip);
+      this.group.worldToLocal(this.radioGrip);
+      this.rightGrip.lerp(this.radioGrip, this.radioHandBlend);
+    }
+
+    this.gearHandTarget.getWorldPosition(this.gearGrip);
+    this.group.worldToLocal(this.gearGrip);
+    this.rightGrip.lerp(this.gearGrip, shiftBlend);
+
+    const preferElbow = (
+      shoulder: THREE.Vector3,
+      grip: THREE.Vector3,
+      elbow: THREE.Vector3,
+      side: -1 | 1,
+    ): void => {
+      elbow.lerpVectors(shoulder, grip, 0.52);
+      elbow.x += side * 0.115;
+      // The right elbow travels forward over the tall floor shifter while steering.
+      // Moving it straight upward brings the sleeve too close to the first-person camera;
+      // forward depth keeps it visually above the knob without filling the lower view.
+      elbow.y -= side > 0 ? 0.12 : 0.14;
+      elbow.z += side > 0 ? -0.11 : 0.035;
+    };
+    preferElbow(this.leftShoulder, this.leftGrip, this.leftElbow, -1);
+    preferElbow(this.rightShoulder, this.rightGrip, this.rightElbow, 1);
+    // Approach the controls from below and to the right. A straight camera-to-button
+    // approach makes the forearm appear as a large sleeve end and hides the fingers.
+    const radioElbowX = this.radioMode === 'power'
+      ? this.driverX + 0.38
+      : this.driverX + 0.52;
+    this.radioElbow.set(radioElbowX, 1.53, -5.38);
+    this.rightElbow.lerp(this.radioElbow, this.radioHandBlend * 0.84);
+    // While changing gear, the right elbow tucks beside the body before extending to the
+    // knob. This is the visible difference between an arm reaching and a rigid rod
+    // pivoting from the shoulder.
+    this.shiftElbow.set(this.driverX + 0.34, 1.37, -4.65);
+    this.rightElbow.lerp(this.shiftElbow, shiftBlend * 0.72);
+
+    // Solve both elbows with fixed anatomical segment lengths. Previously each cylinder
+    // was scaled directly between shoulder and hand, so a radio reach visibly stretched
+    // the entire arm. The preferred elbow points above only choose the bend direction.
+    this.solveArmElbow(this.leftShoulder, this.leftGrip, this.leftElbow);
+    this.solveArmElbow(this.rightShoulder, this.rightGrip, this.rightElbow);
+
+    this.alignArmSegment(this.leftUpperArm, this.leftShoulder, this.leftElbow);
+    this.alignArmSegment(this.leftForearm, this.leftElbow, this.leftGrip);
+    this.alignArmSegment(this.rightUpperArm, this.rightShoulder, this.rightElbow);
+    this.alignArmSegment(this.rightForearm, this.rightElbow, this.rightGrip);
+    this.leftElbowJoint.position.copy(this.leftElbow);
+    this.rightElbowJoint.position.copy(this.rightElbow);
+    this.poseHand(this.leftHand, this.leftElbow, this.leftGrip);
+    this.poseHand(this.rightHand, this.rightElbow, this.rightGrip);
+    // At the gear lever the wrist rolls over the cap: the palm remains above it while
+    // the fingers point down around the knob. Blending the orientation avoids a snap as
+    // the hand leaves and returns to the wheel.
+    this.gearHandQuaternion.setFromUnitVectors(this.armUp, this.gearHandDirection);
+    this.rightHand.quaternion.slerp(this.gearHandQuaternion, shiftBlend);
+    // The cuff is aligned with the hand during normal steering. At the sharply rolled
+    // gear-grip pose its circular end would detach visually and look like a green ball;
+    // collapse it smoothly while the forearm itself supplies the sleeve-to-hand join.
+    const cuffScale = THREE.MathUtils.lerp(1, 0.02, shiftBlend);
+    this.rightCuff.scale.setScalar(cuffScale);
+    const leftGripStrength = 1 - Math.sin(leftTransfer * Math.PI) * 0.88;
+    const steeringRightGrip = 1 - Math.sin(rightTransfer * Math.PI) * 0.88;
+    // A hand arriving at the gear knob closes again even if a steering transfer was in
+    // progress when the automatic gearbox change started.
+    const rightGripStrength = THREE.MathUtils.lerp(steeringRightGrip, 1, shiftBlend);
+    this.setHandGrip(this.leftFingerJoints, this.leftThumbJoints, leftGripStrength);
+    const radioGripStrength = this.radioMode === 'power' ? 0.5 : 0.92;
+    const radioFingerBlend = this.radioHandBlend * (1 - shiftBlend);
+    this.setHandGrip(
+      this.rightFingerJoints,
+      this.rightThumbJoints,
+      THREE.MathUtils.lerp(rightGripStrength, radioGripStrength, radioFingerBlend),
+    );
+    if (this.radioMode === 'power' && this.rightFingerJoints.length >= 4 && radioFingerBlend > 0) {
+      // The index finger sits next to the thumb on the right hand. Keep it straight while
+      // the other three fingers support the palm against the radio face.
+      this.rightFingerJoints[3].rotation.x = THREE.MathUtils.lerp(
+        this.rightFingerJoints[3].rotation.x,
+        -0.1,
+        radioFingerBlend,
+      );
+    } else if ((this.radioMode === 'tune' || this.radioMode === 'seek') && radioFingerBlend > 0) {
+      const fingerRoll = Math.sin(this.radioTuneKnob.rotation.z * 2) * 0.08 * radioFingerBlend;
+      this.rightFingerJoints[3].rotation.x += fingerRoll;
+      if (this.rightThumbJoints[0]) this.rightThumbJoints[0].rotation.x -= fingerRoll;
+    }
+  }
+
+  private solveArmElbow(
+    shoulder: THREE.Vector3,
+    grip: THREE.Vector3,
+    elbow: THREE.Vector3,
+  ): void {
+    const upperLength = 0.44;
+    const forearmLength = 0.43;
+    this.armDirection.subVectors(grip, shoulder);
+    const targetDistance = Math.max(0.001, this.armDirection.length());
+    this.armDirection.multiplyScalar(1 / targetDistance);
+    const solvedDistance = THREE.MathUtils.clamp(
+      targetDistance,
+      Math.abs(upperLength - forearmLength) + 0.002,
+      upperLength + forearmLength - 0.002,
+    );
+    const along = (
+      upperLength * upperLength
+      - forearmLength * forearmLength
+      + solvedDistance * solvedDistance
+    ) / (2 * solvedDistance);
+    const bendHeight = Math.sqrt(Math.max(0, upperLength * upperLength - along * along));
+    this.armElbowBase.copy(shoulder).addScaledVector(this.armDirection, along);
+    this.armBendDirection.subVectors(elbow, this.armElbowBase);
+    this.armBendDirection.addScaledVector(
+      this.armDirection,
+      -this.armBendDirection.dot(this.armDirection),
+    );
+    if (this.armBendDirection.lengthSq() < 0.000001) this.armBendDirection.set(0, -1, 0);
+    this.armBendDirection.normalize();
+    elbow.copy(this.armElbowBase).addScaledVector(this.armBendDirection, bendHeight);
+  }
+
+  /** Amount the driver's head should follow the upper body toward the radio. */
+  get firstPersonBodyLean(): number {
+    return this.radioBodyLean;
+  }
+
+  /** Show the seated first-person body only while the player is actually driving. */
+  setDriverVisible(visible: boolean): void {
+    if (visible === this.driverVisible) return;
+    this.driverVisible = visible;
+    for (const part of [
+      this.torso,
+      this.leftUpperArm,
+      this.leftForearm,
+      this.rightUpperArm,
+      this.rightForearm,
+      this.leftElbowJoint,
+      this.rightElbowJoint,
+      this.leftHand,
+      this.rightHand,
+      this.leftThigh,
+      this.leftShin,
+      this.leftKnee,
+      this.rightThigh,
+      this.rightShin,
+      this.rightKnee,
+      this.leftBoot,
+      this.rightBoot,
+    ]) part.visible = visible;
+  }
+
+  private alignArmSegment(mesh: THREE.Mesh, from: THREE.Vector3, to: THREE.Vector3): void {
+    this.armDirection.subVectors(to, from);
+    const length = this.armDirection.length();
+    mesh.position.copy(from).addScaledVector(this.armDirection, 0.5);
+    mesh.scale.set(1, length, 1);
+    mesh.quaternion.setFromUnitVectors(this.armUp, this.armDirection.normalize());
+  }
+
+  private poseHand(hand: THREE.Group, elbow: THREE.Vector3, grip: THREE.Vector3): void {
+    this.armDirection.subVectors(grip, elbow).normalize();
+    hand.position.copy(grip).addScaledVector(this.armDirection, 0.012);
+    hand.quaternion.setFromUnitVectors(this.armUp, this.armDirection);
+  }
+
+  private setHandGrip(fingers: THREE.Group[], thumbs: THREE.Group[], strength: number): void {
+    const grip = THREE.MathUtils.clamp(strength, 0, 1);
+    for (const joint of fingers) joint.rotation.x = THREE.MathUtils.lerp(-0.18, -1.02, grip);
+    for (const joint of thumbs) joint.rotation.x = THREE.MathUtils.lerp(-0.12, -0.76, grip);
   }
 
   private buildGauge(
@@ -931,6 +1287,89 @@ export class Dashboard {
     return group;
   }
 
+  requestRadioPower(): void {
+    this.pendingRadioPower = Math.min(3, this.pendingRadioPower + 1);
+  }
+
+  requestRadioSeek(direction = 1): void {
+    this.pendingRadioSeek = THREE.MathUtils.clamp(this.pendingRadioSeek + Math.sign(direction), -4, 4);
+  }
+
+  private startRadioInteraction(mode: 'power' | 'tune' | 'seek', direction = 0): void {
+    this.radioMode = mode;
+    this.radioPhase = 'reach';
+    this.radioPhaseTime = 0;
+    this.radioDirection = Math.sign(direction);
+    this.radioMinimumTuneTime = mode === 'tune' ? 0.16 : 0;
+  }
+
+  private updateRadioInteraction(dt: number, tuneInput: number, gearBusy: boolean): DashboardActions {
+    const actions = this.dashboardActions;
+    actions.radioPowerPress = false;
+    actions.radioSeekDirection = 0;
+    actions.radioTuneDirection = 0;
+
+    if (!gearBusy && this.radioMode === 'idle') {
+      if (this.pendingRadioPower > 0) {
+        this.pendingRadioPower--;
+        this.startRadioInteraction('power');
+      } else if (this.pendingRadioSeek !== 0) {
+        const direction = Math.sign(this.pendingRadioSeek);
+        this.pendingRadioSeek -= direction;
+        this.startRadioInteraction('seek', direction);
+      } else if (tuneInput !== 0) {
+        this.startRadioInteraction('tune', tuneInput);
+      }
+    }
+
+    if (!gearBusy && this.radioMode !== 'idle') {
+      this.radioPhaseTime += dt;
+      if (this.radioPhase === 'reach' && this.radioPhaseTime >= 0.34) {
+        this.radioPhase = 'operate';
+        this.radioPhaseTime = 0;
+        if (this.radioMode === 'power') actions.radioPowerPress = true;
+        else if (this.radioMode === 'seek') actions.radioSeekDirection = this.radioDirection;
+      } else if (this.radioPhase === 'operate') {
+        if (this.radioMode === 'tune') {
+          if (tuneInput !== 0) this.radioDirection = Math.sign(tuneInput);
+          this.radioMinimumTuneTime = Math.max(0, this.radioMinimumTuneTime - dt);
+          actions.radioTuneDirection = this.radioDirection;
+          this.radioTuneKnob.rotation.z += this.radioDirection * dt * 6.5;
+          if (tuneInput === 0 && this.radioMinimumTuneTime <= 0) {
+            this.radioPhase = 'return';
+            this.radioPhaseTime = 0;
+          }
+        } else {
+          if (this.radioMode === 'seek') this.radioTuneKnob.rotation.z += this.radioDirection * dt * 9;
+          if (this.radioPhaseTime >= 0.18) {
+            this.radioPhase = 'return';
+            this.radioPhaseTime = 0;
+          }
+        }
+      } else if (this.radioPhase === 'return' && this.radioPhaseTime >= 0.34) {
+        this.radioMode = 'idle';
+        this.radioPhaseTime = 0;
+      }
+    }
+
+    const smooth = (value: number): number => {
+      const t = THREE.MathUtils.clamp(value, 0, 1);
+      return t * t * (3 - 2 * t);
+    };
+    this.radioHandBlend = this.radioMode === 'idle'
+      ? 0
+      : this.radioPhase === 'reach'
+        ? smooth(this.radioPhaseTime / 0.34)
+        : this.radioPhase === 'return'
+          ? 1 - smooth(this.radioPhaseTime / 0.34)
+          : 1;
+    const buttonPress = this.radioMode === 'power' && this.radioPhase === 'operate'
+      ? Math.sin(THREE.MathUtils.clamp(this.radioPhaseTime / 0.18, 0, 1) * Math.PI)
+      : 0;
+    this.radioPowerButton.position.z = 0.02 - buttonPress * 0.009;
+    return actions;
+  }
+
   update(data: {
     dt: number;
     speedMph: number;
@@ -943,7 +1382,8 @@ export class Dashboard {
     miles: number;
     clock: string;
     highBeam: boolean;
-  }): void {
+    radioTuneDirection: number;
+  }): DashboardActions {
     const speedT = THREE.MathUtils.clamp(data.speedMph / 80, 0, 1);
     this.speedNeedle.rotation.z = GAUGE_START + (GAUGE_END - GAUGE_START) * speedT;
 
@@ -951,7 +1391,9 @@ export class Dashboard {
     this.revNeedle.rotation.z = GAUGE_START + (GAUGE_END - GAUGE_START) * revT;
 
     // rotation order is XYZ, so the spin about Z happens before the column tilt about X
-    this.wheel.rotation.z = data.wheelAngle * 2.6;
+    const visualWheelAngle = data.wheelAngle;
+    const wheelMagnitude = Math.pow(Math.abs(visualWheelAngle), 1.18);
+    this.wheel.rotation.z = Math.sign(visualWheelAngle) * wheelMagnitude * 2;
 
     // Follow the H-pattern engraved on the knob. At rest the lever returns to the neutral
     // channel; forward gears alternate front/back while moving across the three gates.
@@ -965,16 +1407,47 @@ export class Dashboard {
       R: { x: 0.14, z: -0.14 },
     };
     const lever = moving ? positions[data.gear] ?? positions[5] : { x: 0, z: 0 };
-    this.gearStick.rotation.x = THREE.MathUtils.lerp(this.gearStick.rotation.x, lever.x, 0.16);
-    this.gearStick.rotation.z = THREE.MathUtils.lerp(this.gearStick.rotation.z, lever.z, 0.16);
 
     // The clutch follows each actual gearbox transition, including entering reverse. The
     // short hold makes the movement readable without keeping it down between gears.
+    let shiftStarted = false;
     if (this.lastGear === null) this.lastGear = data.gear;
     else if (data.gear !== this.lastGear) {
       this.lastGear = data.gear;
-      this.clutchTime = 0.34;
+      shiftStarted = true;
     }
+    if (moving !== this.lastMoving) {
+      this.lastMoving = moving;
+      shiftStarted = true;
+    }
+    if (shiftStarted) {
+      this.clutchTime = 0.44;
+      this.shiftHandTime = this.shiftHandDuration;
+    }
+    this.shiftHandTime = Math.max(0, this.shiftHandTime - data.dt);
+    const shiftPhase = this.shiftHandTime > 0
+      ? 1 - this.shiftHandTime / this.shiftHandDuration
+      : 1;
+    const smoothstep = (from: number, to: number, value: number): number => {
+      const t = THREE.MathUtils.clamp((value - from) / (to - from), 0, 1);
+      return t * t * (3 - 2 * t);
+    };
+    const handReach = smoothstep(0, 0.3, shiftPhase);
+    const handReturn = 1 - smoothstep(0.68, 1, shiftPhase);
+    const shiftHandBlend = this.shiftHandTime > 0 ? Math.min(handReach, handReturn) : 0;
+    const radioActions = this.updateRadioInteraction(
+      data.dt,
+      data.radioTuneDirection,
+      this.shiftHandTime > 0,
+    );
+    // The lever waits until the fingers arrive, then crosses the gate while the hand is
+    // wrapped around the knob. This avoids the common mechanical-looking sequence where
+    // the gearbox moves first and the arm chases it afterwards.
+    const leverResponse = shiftStarted || (this.shiftHandTime > 0 && shiftPhase < 0.24)
+      ? 0
+      : 1 - Math.exp(-data.dt * 13);
+    this.gearStick.rotation.x = THREE.MathUtils.lerp(this.gearStick.rotation.x, lever.x, leverResponse);
+    this.gearStick.rotation.z = THREE.MathUtils.lerp(this.gearStick.rotation.z, lever.z, leverResponse);
     this.clutchTime = Math.max(0, this.clutchTime - data.dt);
 
     const reversing = data.signedSpeed < -0.08;
@@ -1006,6 +1479,7 @@ export class Dashboard {
     );
     this.rightBoot.position.y = 1.27 + Math.sin(pedalTravel * Math.PI) * 0.075;
     this.poseDriverLegs();
+    this.poseDriverUpperBody(shiftHandBlend);
 
     if (data.clock !== this.lastClock) {
       this.lastClock = data.clock;
@@ -1021,6 +1495,7 @@ export class Dashboard {
 
     const lamp = this.highBeamLamp.material as THREE.ShaderMaterial;
     lamp.uniforms.uEmissive.value = data.highBeam ? 1.6 : 0.08;
+    return radioActions;
   }
 
   /** @param needle 0..1 across the band. */
