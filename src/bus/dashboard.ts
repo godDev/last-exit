@@ -281,6 +281,7 @@ export class Dashboard {
   };
 
   private driverVisible = true;
+  private driverControlsEnabled = true;
 
   constructor(private readonly driverX: number) {
     // Dark, but with enough value separation for the moulded layers to remain legible
@@ -771,6 +772,10 @@ export class Dashboard {
     buildBoot(this.rightBoot);
     this.poseDriverLegs();
 
+    // The seat belongs to the coach, not to the driver body. It remains behind when the
+    // player gets out, while its backrest stays safely behind the first-person eye plane.
+    this.buildDriverSeat();
+
     // --- driver's ancillary equipment ----------------------------------------
     const equipmentPlastic = createPBRMaterial({ surface: 'plastic', color: 0x26231e, roughness: 0.72 });
     const fareBox = new THREE.Group();
@@ -787,6 +792,122 @@ export class Dashboard {
 
     // the whole binnacle belongs to the driver's eyes, not to the mirror
     this.group.traverse((child) => child.layers.set(LAYER_DIRECT_ONLY));
+  }
+
+  private buildDriverSeat(): void {
+    const seat = new THREE.Group();
+    seat.position.set(this.driverX, 0, 0);
+
+    const brownVinyl = createPBRMaterial({
+      surface: 'fabric',
+      color: 0x4a2e20,
+      roughness: 0.88,
+    });
+    const wornVinyl = createPBRMaterial({
+      surface: 'fabric',
+      color: 0x644333,
+      roughness: 0.96,
+    });
+    const darkPiping = createPBRMaterial({
+      surface: 'rubber',
+      color: 0x241914,
+      roughness: 0.9,
+    });
+    const frameMetal = createPBRMaterial({
+      surface: 'metal',
+      color: 0x353432,
+      roughness: 0.58,
+    });
+    const rubbedMetal = createPBRMaterial({
+      surface: 'metal',
+      color: 0x77736b,
+      roughness: 0.42,
+    });
+
+    // Floor plate, sprung pedestal and fore/aft rails identify this as a commercial
+    // driver's seat rather than another passenger chair.
+    const floorPlate = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.035, 0.36), frameMetal);
+    floorPlate.position.set(0, 0.855, -4.67);
+    seat.add(floorPlate);
+    for (const x of [-0.135, 0.135]) for (const z of [-4.81, -4.53]) {
+      const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.012, 8), rubbedMetal);
+      bolt.position.set(x, 0.88, z);
+      seat.add(bolt);
+    }
+    const lowerPost = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.1, 0.25, 10), frameMetal);
+    lowerPost.position.set(0, 0.99, -4.67);
+    seat.add(lowerPost);
+    const spring = new THREE.Mesh(new THREE.TorusGeometry(0.083, 0.014, 6, 14), rubbedMetal);
+    spring.rotation.x = Math.PI / 2;
+    spring.position.set(0, 1.105, -4.67);
+    seat.add(spring);
+    for (const x of [-0.15, 0.15]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.045, 0.48), frameMetal);
+      rail.position.set(x, 1.15, -4.69);
+      seat.add(rail);
+    }
+
+    const pan = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.07, 0.5), frameMetal);
+    pan.position.set(0, 1.2, -4.69);
+    seat.add(pan);
+    const cushion = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.48, 2, 1, 2), brownVinyl);
+    cushion.position.set(0, 1.295, -4.71);
+    seat.add(cushion);
+    // Rounded side bolsters soften the square pan silhouette and hold the seated thighs.
+    for (const x of [-0.225, 0.225]) {
+      const bolster = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.36, 4, 9), brownVinyl);
+      bolster.rotation.x = Math.PI / 2;
+      bolster.position.set(x, 1.365, -4.7);
+      seat.add(bolster);
+    }
+    const cushionWear = new THREE.Mesh(new THREE.BoxGeometry(0.27, 0.009, 0.3), wornVinyl);
+    cushionWear.position.set(0.012, 1.362, -4.735);
+    seat.add(cushionWear);
+    for (const x of [-0.17, 0.17]) {
+      const seam = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.012, 0.39), darkPiping);
+      seam.position.set(x, 1.368, -4.71);
+      seat.add(seam);
+    }
+
+    // Reclined backrest with a separate worn centre pad, piping and a small headrest.
+    const backrest = new THREE.Group();
+    backrest.position.set(0, 1.32, -4.49);
+    backrest.rotation.x = 0.1;
+    const backFrame = new THREE.Mesh(new THREE.BoxGeometry(0.49, 0.59, 0.075), frameMetal);
+    backFrame.position.y = 0.29;
+    const backPad = new THREE.Mesh(new THREE.BoxGeometry(0.47, 0.56, 0.12, 2, 3, 1), brownVinyl);
+    backPad.position.set(0, 0.3, -0.055);
+    const backWear = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.32, 0.012), wornVinyl);
+    backWear.position.set(0.018, 0.31, -0.122);
+    backrest.add(backFrame, backPad, backWear);
+    for (const x of [-0.205, 0.205]) {
+      const piping = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.49, 0.014), darkPiping);
+      piping.position.set(x, 0.3, -0.121);
+      backrest.add(piping);
+    }
+    for (const x of [-0.09, 0.09]) {
+      const headrestPost = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.14, 7), rubbedMetal);
+      headrestPost.position.set(x, 0.64, -0.015);
+      backrest.add(headrestPost);
+    }
+    const headrest = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.17, 0.12, 2, 2, 1), brownVinyl);
+    headrest.position.set(0, 0.75, -0.04);
+    backrest.add(headrest);
+    seat.add(backrest);
+
+    // Short adjustment lever on the aisle side, with a rubbed metal pivot and dark grip.
+    const adjustPivot = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.025, 8), rubbedMetal);
+    adjustPivot.rotation.z = Math.PI / 2;
+    adjustPivot.position.set(0.28, 1.17, -4.68);
+    const adjustLever = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.18, 7), rubbedMetal);
+    adjustLever.rotation.z = -0.72;
+    adjustLever.position.set(0.34, 1.12, -4.68);
+    const adjustGrip = new THREE.Mesh(new THREE.CapsuleGeometry(0.017, 0.04, 3, 7), darkPiping);
+    adjustGrip.rotation.z = -0.72;
+    adjustGrip.position.set(0.405, 1.06, -4.68);
+    seat.add(adjustPivot, adjustLever, adjustGrip);
+
+    this.group.add(seat);
   }
 
   private poseDriverLegs(): void {
@@ -1200,6 +1321,31 @@ export class Dashboard {
     ]) part.visible = visible;
   }
 
+  /** Keep walking keys from operating the parked coach while the driver is outside. */
+  setDriverControlsEnabled(enabled: boolean): void {
+    if (enabled === this.driverControlsEnabled) return;
+    this.driverControlsEnabled = enabled;
+    if (enabled) return;
+
+    // An interaction may be halfway through when the player leaves the seat. Cancel it
+    // immediately so no delayed radio press, gear change, or limb animation can fire.
+    this.pendingRadioPower = 0;
+    this.pendingRadioSeek = 0;
+    this.radioMode = 'idle';
+    this.radioPhase = 'reach';
+    this.radioPhaseTime = 0;
+    this.radioHandBlend = 0;
+    this.radioBodyLean = 0;
+    this.radioDirection = 0;
+    this.radioMinimumTuneTime = 0;
+    this.radioPowerButton.position.z = 0.02;
+    this.shiftHandTime = 0;
+    this.clutchTime = 0;
+    this.dashboardActions.radioPowerPress = false;
+    this.dashboardActions.radioSeekDirection = 0;
+    this.dashboardActions.radioTuneDirection = 0;
+  }
+
   private alignArmSegment(mesh: THREE.Mesh, from: THREE.Vector3, to: THREE.Vector3): void {
     this.armDirection.subVectors(to, from);
     const length = this.armDirection.length();
@@ -1288,10 +1434,12 @@ export class Dashboard {
   }
 
   requestRadioPower(): void {
+    if (!this.driverControlsEnabled) return;
     this.pendingRadioPower = Math.min(3, this.pendingRadioPower + 1);
   }
 
   requestRadioSeek(direction = 1): void {
+    if (!this.driverControlsEnabled) return;
     this.pendingRadioSeek = THREE.MathUtils.clamp(this.pendingRadioSeek + Math.sign(direction), -4, 4);
   }
 
@@ -1384,6 +1532,12 @@ export class Dashboard {
     highBeam: boolean;
     radioTuneDirection: number;
   }): DashboardActions {
+    if (!this.driverControlsEnabled) {
+      // Synchronise the gearbox state while away from the seat. Re-entering the coach
+      // must not create a fake gear-change animation from stale state.
+      this.lastGear = data.gear;
+      this.lastMoving = data.speedMph >= 0.5;
+    }
     const speedT = THREE.MathUtils.clamp(data.speedMph / 80, 0, 1);
     this.speedNeedle.rotation.z = GAUGE_START + (GAUGE_END - GAUGE_START) * speedT;
 
@@ -1420,7 +1574,7 @@ export class Dashboard {
       this.lastMoving = moving;
       shiftStarted = true;
     }
-    if (shiftStarted) {
+    if (shiftStarted && this.driverControlsEnabled) {
       this.clutchTime = 0.44;
       this.shiftHandTime = this.shiftHandDuration;
     }
@@ -1437,7 +1591,7 @@ export class Dashboard {
     const shiftHandBlend = this.shiftHandTime > 0 ? Math.min(handReach, handReturn) : 0;
     const radioActions = this.updateRadioInteraction(
       data.dt,
-      data.radioTuneDirection,
+      this.driverControlsEnabled ? data.radioTuneDirection : 0,
       this.shiftHandTime > 0,
     );
     // The lever waits until the fingers arrive, then crosses the gate while the hand is
@@ -1451,8 +1605,9 @@ export class Dashboard {
     this.clutchTime = Math.max(0, this.clutchTime - data.dt);
 
     const reversing = data.signedSpeed < -0.08;
-    const gasDown = data.forwardPressed || (data.reversePressed && reversing);
-    const brakeDown = data.reversePressed && !reversing;
+    const gasDown = this.driverControlsEnabled
+      && (data.forwardPressed || (data.reversePressed && reversing));
+    const brakeDown = this.driverControlsEnabled && data.reversePressed && !reversing;
     const pedalResponse = 1 - Math.exp(-data.dt * 15);
     const depress = (pedal: THREE.Group, down: boolean, travel: number): void => {
       pedal.rotation.x = THREE.MathUtils.lerp(pedal.rotation.x, down ? travel : 0, pedalResponse);

@@ -25,6 +25,8 @@ export class Interactions {
   private lookYaw = 0;
   private lookPitch = 0;
   private activeStop: StopSpec | null = null;
+  private doorTransition: 'idle' | 'opening' | 'closing' = 'idle';
+  private pendingExit: { bus: Bus; stop: StopSpec } | null = null;
 
   constructor(
     private readonly stops: StoryStops,
@@ -34,15 +36,45 @@ export class Interactions {
     private readonly onEnter: (stop: StopSpec) => void,
     private readonly onInspect: (id: string) => void,
     private readonly onCheckpoint: () => void,
+    private readonly setBusDoor: (open: boolean) => void,
+    private readonly getBusDoorOpen: () => number,
   ) {}
 
+  get transitioning(): boolean {
+    return this.doorTransition !== 'idle';
+  }
+
+  /** Advance door-gated entry/exit even while a story choice is covering the HUD. */
+  updateTransition(): boolean {
+    if (this.doorTransition === 'idle') return false;
+
+    if (this.doorTransition === 'opening') {
+      this.ui.prompt(settings.lang === 'ru' ? 'ДВЕРИ ОТКРЫВАЮТСЯ…' : 'DOORS OPENING…');
+      if (this.getBusDoorOpen() >= 0.97 && this.pendingExit) {
+        const { bus, stop } = this.pendingExit;
+        this.pendingExit = null;
+        this.doorTransition = 'idle';
+        this.finishExit(bus, stop);
+      }
+      return true;
+    }
+
+    this.ui.prompt(settings.lang === 'ru' ? 'ДВЕРИ ЗАКРЫВАЮТСЯ…' : 'DOORS CLOSING…');
+    if (this.getBusDoorOpen() <= 0.03) {
+      this.doorTransition = 'idle';
+      this.ui.prompt(null);
+    }
+    return true;
+  }
+
   update(dt: number, bus: Bus, input: Input): void {
+    if (this.updateTransition()) return;
     if (!this.onFoot) {
       const nearby = this.stops.nearest(bus.miles);
       const stopped = bus.speedMph <= 1;
       const available = nearby && !this.completed(nearby) ? nearby : null;
       this.ui.prompt(available && stopped ? this.exitPrompt(available) : null);
-      if (available && stopped && input.wasTapped('interact')) this.exit(bus, available);
+      if (available && stopped && input.wasTapped('interact')) this.beginExit(bus, available);
       return;
     }
 
@@ -134,11 +166,19 @@ export class Interactions {
     return this.flashlightOn;
   }
 
-  private exit(bus: Bus, stop: StopSpec): void {
+  private beginExit(bus: Bus, stop: StopSpec): void {
     // The interaction prompt deliberately has a forgiving approach radius. Once the
     // driver commits to leaving the bus, park it at the authored turnout so the compact
     // on-foot area is actually reachable rather than dozens of metres down the shoulder.
     bus.restoreMiles(stop.mile);
+    bus.speed = 0;
+    this.pendingExit = { bus, stop };
+    this.doorTransition = 'opening';
+    this.setBusDoor(true);
+    this.ui.prompt(settings.lang === 'ru' ? 'ДВЕРИ ОТКРЫВАЮТСЯ…' : 'DOORS OPENING…');
+  }
+
+  private finishExit(bus: Bus, stop: StopSpec): void {
     this.onFoot = true;
     this.flashlightOn = false;
     this.activeStop = stop;
@@ -146,7 +186,6 @@ export class Interactions {
     this.position.copy(door).add(new THREE.Vector3(0, 1.68, 0));
     this.lookYaw = bus.heading;
     this.lookPitch = 0;
-    bus.speed = 0;
     this.story.flag(`visited:${stop.id}`);
     this.story.checkpoint({ kind: 'stop', stopId: stop.id });
     this.onExit(stop);
@@ -169,10 +208,12 @@ export class Interactions {
     this.onFoot = false;
     this.flashlightOn = false;
     this.activeStop = null;
+    this.doorTransition = 'closing';
+    this.setBusDoor(false);
     this.story.checkpoint({ kind: 'driving' });
     if (stop) this.onEnter(stop);
     this.onCheckpoint();
-    this.ui.prompt(null);
+    this.ui.prompt(settings.lang === 'ru' ? 'ДВЕРИ ЗАКРЫВАЮТСЯ…' : 'DOORS CLOSING…');
   }
 
   private inspect(id: string): void {

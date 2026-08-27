@@ -4,7 +4,7 @@ import { createRetroMaterial } from '../render/retroMaterial';
 import { createPBRMaterial, enablePBRShadows } from '../render/pbrMaterial';
 import { canvasTexture } from '../render/textures';
 import { Dashboard } from './dashboard';
-import { Mirror, LAYER_DIRECT_ONLY, LAYER_MIRROR_ONLY } from './mirror';
+import { Mirror, LAYER_DIRECT_ONLY, LAYER_MIRROR_ONLY, LAYER_WORLD } from './mirror';
 
 /**
  * The saloon of a 1970s intercity coach.
@@ -129,22 +129,35 @@ function buildShell(): THREE.BufferGeometry {
   // side walls: sill below the glass, header above it, pillars between
   for (const side of [-1, 1]) {
     const x = side * HALF_WIDTH;
-    parts.push(box(0.07, 0.62, length, x, FLOOR_Y + 0.31, midZ, PANEL));
-    parts.push(box(0.07, 0.5, length, x, ROOF_Y - 0.25, midZ, PANEL));
-    // waist rail, lower kick strip and stamped panel dividers
-    parts.push(box(0.085, 0.055, length - 0.4, x - side * 0.012, FLOOR_Y + 0.62, 0.1, 0x50483c));
-    parts.push(box(0.085, 0.045, length - 0.4, x - side * 0.012, FLOOR_Y + 0.08, 0.1, 0x171511));
+    // The kerb-side front doorway is a real hole in the shell. Earlier versions merely
+    // placed animated leaves over these full-length slabs, so opening the door revealed a
+    // wall from floor to waist height that looked like an enormous threshold.
+    const spans: Array<[number, number]> = side > 0
+      ? [[front, -5.57], [-3.79, back]]
+      : [[front, back]];
+    for (const [spanStart, spanEnd] of spans) {
+      const spanLength = spanEnd - spanStart;
+      const spanCentre = (spanStart + spanEnd) * 0.5;
+      parts.push(box(0.07, 0.62, spanLength, x, FLOOR_Y + 0.31, spanCentre, PANEL));
+      parts.push(box(0.07, 0.5, spanLength, x, ROOF_Y - 0.25, spanCentre, PANEL));
+      // Waist rail and lower kick strip terminate cleanly at the door jambs.
+      parts.push(box(0.085, 0.055, spanLength, x - side * 0.012, FLOOR_Y + 0.62, spanCentre, 0x50483c));
+      parts.push(box(0.085, 0.045, spanLength, x - side * 0.012, FLOOR_Y + 0.08, spanCentre, 0x171511));
+    }
     // Scraped kick panels and irregular repair plates accumulate along the lower wall.
     for (let patch = 0; patch < 6; patch++) {
       const z = front + 1.0 + patch * 1.82 + (side > 0 ? 0.27 : 0);
+      if (side > 0 && z > -5.57 && z < -3.79) continue;
       parts.push(box(0.008, 0.08 + (patch % 2) * 0.035, 0.3 + (patch % 3) * 0.11, x - side * 0.05, FLOOR_Y + 0.14, z, patch % 2 ? 0x39332b : 0x443b31));
     }
     for (let z = front + 0.72; z < back - 0.4; z += 0.82) {
+      if (side > 0 && z > -5.57 && z < -3.79) continue;
       parts.push(box(0.085, 0.5, 0.018, x - side * 0.012, FLOOR_Y + 0.32, z, 0x171511));
     }
     // window pillars
     for (let i = 0; i < 8; i++) {
       const z = front + 2.2 + i * 1.28;
+      if (side > 0 && z > -5.57 && z < -3.79) continue;
       parts.push(box(0.08, 0.95, 0.11, x, FLOOR_Y + 1.12, z, TRIM));
     }
   }
@@ -154,14 +167,9 @@ function buildShell(): THREE.BufferGeometry {
   for (const side of [-1, 1]) {
     parts.push(box(0.13, 1.6, 0.13, side * (HALF_WIDTH - 0.08), FLOOR_Y + 1.5, front + 0.15, PANEL));
   }
-  // the step well and door on the kerb side
-  parts.push(box(0.06, 1.95, 0.9, HALF_WIDTH - 0.02, FLOOR_Y + 0.98, front + 1.35, 0x201d18));
-  parts.push(box(0.6, 0.16, 0.86, HALF_WIDTH - 0.36, FLOOR_Y - 0.28, front + 1.35, 0x1b1815));
-  // door frame, latch and yellow passenger grab handle
-  parts.push(box(0.075, 1.72, 0.045, HALF_WIDTH - 0.07, FLOOR_Y + 1.02, front + 0.92, 0x4d463b));
-  parts.push(box(0.075, 1.72, 0.045, HALF_WIDTH - 0.07, FLOOR_Y + 1.02, front + 1.78, 0x4d463b));
-  parts.push(box(0.09, 0.18, 0.035, HALF_WIDTH - 0.12, FLOOR_Y + 1.0, front + 1.0, 0x8d742c));
-  parts.push(box(0.055, 0.72, 0.055, HALF_WIDTH - 0.3, FLOOR_Y + 1.38, front + 1.82, 0xb28a30));
+  // The step well remains structural, while the visible door itself is the articulated
+  // four-leaf assembly built below. Keeping the old merged slab here would leave a closed
+  // black rectangle in the opening after the real leaves folded away.
 
   // rear bulkhead with the emergency door, left open as a frame around the back window
   parts.push(box(HALF_WIDTH * 2, 0.5, 0.09, 0, FLOOR_Y + 0.25, back - 0.05, PANEL));
@@ -260,10 +268,11 @@ interface ExteriorWheel {
   readonly steer: THREE.Group | null;
 }
 
-interface ExteriorDoorLeaf {
-  readonly pivot: THREE.Group;
-  /** The two leaves fold outwards in opposite directions from their outer hinges. */
-  readonly openingDirection: number;
+interface ExteriorDoorPair {
+  readonly outerPivot: THREE.Group;
+  readonly innerPivot: THREE.Group;
+  /** Front and rear pairs mirror one another around the centre of the doorway. */
+  readonly foldDirection: number;
 }
 
 export class Cabin {
@@ -279,9 +288,12 @@ export class Cabin {
   private readonly leftMirrorTarget = new THREE.Vector3();
   private readonly leftMirrorCamera = new THREE.Vector3();
   private readonly exteriorWheels: ExteriorWheel[] = [];
-  private readonly exteriorDoorLeaves: ExteriorDoorLeaf[] = [];
+  private readonly exteriorDoorPairs: ExteriorDoorPair[] = [];
+  private readonly passengerDoor = new THREE.Group();
   private readonly brakeLampMaterials: THREE.ShaderMaterial[] = [];
   private readonly headlampMaterials: THREE.ShaderMaterial[] = [];
+  private readonly exterior: THREE.Group;
+  private exteriorVisibleToDriver = false;
   private doorOpen = 0;
   private doorTarget = 0;
 
@@ -305,19 +317,22 @@ export class Cabin {
     shell.receiveShadow = false;
     seats.castShadow = false;
     seats.receiveShadow = false;
-    const exterior = this.buildExterior();
+    this.exterior = this.buildExterior();
     // The driver is inside this geometry. Rendering it through the direct camera makes
     // the lower body panels clip into view as huge black rectangles when looking down.
     // Mirrors still need the complete coach body, so keep it exclusively on their layer.
-    exterior.traverse((child) => {
+    this.exterior.traverse((child) => {
       child.layers.set(LAYER_MIRROR_ONLY);
       // The coach shadow lies directly below the driver's eye. Looking down exposed its
       // coarse shadow-map silhouette as enormous black zigzags across the footwell.
       // Other world objects still cast shadows; only the bus stops shadowing itself.
       if (child instanceof THREE.Mesh) child.castShadow = false;
     });
+    // The folding door is a single physical object viewed from both sides. Keep it visible
+    // from the cab while the rest of the exterior skin stays out of the first-person view.
+    this.passengerDoor.traverse((child) => child.layers.set(LAYER_WORLD));
     const saloonDetails = this.buildSaloonDetails();
-    this.group.add(shell, seats, saloonDetails, exterior);
+    this.group.add(shell, seats, saloonDetails, this.exterior);
 
     // A row of tired fluorescent-style fixtures: metal bezel, cloudy diffuser and the
     // emissive panel itself. Six smaller pools read more naturally than four bare planes.
@@ -545,6 +560,33 @@ export class Cabin {
       new THREE.Mesh(merged(chromeParts, 'exterior chrome'), createPBRMaterial({ surface: 'metal', vertexColors: true })),
     );
 
+    // Period-correct paired wipers sit on the outside layer only. Their shallow depth and
+    // single-sided windscreen keep them completely out of the seated first-person view.
+    const wiperMaterial = createPBRMaterial({ surface: 'metal', color: 0x17191a, roughness: 0.68 });
+    for (const side of [-1, 1]) {
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.66, 0.025), wiperMaterial);
+      arm.position.set(side * 0.58, 1.96, front - 0.226);
+      arm.rotation.z = side * -0.57;
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.58, 0.018), wiperMaterial);
+      blade.position.set(side * 0.38, 2.19, front - 0.234);
+      blade.rotation.z = side * -0.57;
+      const pivot = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.034, 0.028, 9), wiperMaterial);
+      pivot.rotation.x = Math.PI / 2;
+      pivot.position.set(side * 0.78, 1.7, front - 0.235);
+      root.add(arm, blade, pivot);
+    }
+
+    const destinationMaterial = createRetroMaterial({
+      map: decalTexture('ROUTE 17', '#171b1d', '#e6c779'),
+      mode: 'emissive',
+      emissive: 0.26,
+      snap: 0.12,
+    });
+    const destination = new THREE.Mesh(new THREE.PlaneGeometry(0.88, 0.17), destinationMaterial);
+    destination.rotation.y = Math.PI;
+    destination.position.set(0, 3.0, front - 0.151);
+    root.add(destination);
+
     // Service hardware and underbody detail become visible at authored stops, where the
     // player can walk close enough for the original broad panels to feel unfinished.
     const darkMetal = createPBRMaterial({ surface: 'metal', color: 0x24282a, roughness: 0.58, metalness: 0.68 });
@@ -602,50 +644,142 @@ export class Cabin {
   }
 
   private addCoachDoor(root: THREE.Group, sideX: number, glassMaterial: THREE.Material): void {
-    const panel = createRetroMaterial({ color: 0x34444d, snap: 0.32 });
-    const trim = createRetroMaterial({ color: 0x151719, snap: 0.22 });
+    const panel = createRetroMaterial({ color: 0x516771, snap: 0.26, ambientBoost: 1.08 });
+    const trim = createRetroMaterial({ color: 0x202426, snap: 0.2, ambientBoost: 1.06 });
+    const accent = createRetroMaterial({ color: 0xd2c394, snap: 0.16, ambientBoost: 1.14 });
     const chrome = createRetroMaterial({ color: 0x9b9d93, snap: 0.16, ambientBoost: 1.15 });
     const stepLamp = createRetroMaterial({ color: 0xffb64a, mode: 'emissive', emissive: 0.9, snap: 0.12 });
+    const rubber = createPBRMaterial({ surface: 'rubber', color: 0x101112, roughness: 0.94 });
+    const doorGlass = glassMaterial.clone();
+    doorGlass.side = THREE.DoubleSide;
+    doorGlass.needsUpdate = true;
     const outsideX = sideX + 0.11;
+    const door = this.passengerDoor;
+    door.name = 'outward-folding-passenger-door';
+    root.add(door);
 
-    // Stationary frame and sill stay with the body while the two leaves fold away from it.
+    // Frame, step and moving leaves belong to one assembly, visible from both sides.
     for (const z of [-5.54, -3.82]) {
-      const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.11, 1.58, 0.065), trim);
-      jamb.position.set(outsideX, 2.16, z);
-      root.add(jamb);
+      const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.11, 1.92, 0.065), trim);
+      jamb.position.set(outsideX, 1.98, z);
+      door.add(jamb);
     }
     const header = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.09, 1.76), trim);
     header.position.set(outsideX, 2.93, -4.68);
-    const sill = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.1, 1.76), trim);
-    sill.position.set(outsideX, 1.42, -4.68);
-    const step = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.08, 1.52), trim);
-    step.position.set(sideX + 0.28, 0.88, -4.68);
+    // Only a thin sill remains at floor level. Beneath it, shallow treads descend toward
+    // the road instead of presenting one tall black block across half the doorway.
+    const sill = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.035, 1.76), chrome);
+    sill.position.set(sideX + 0.11, FLOOR_Y + 0.005, -4.68);
+    const treadMaterial = createPBRMaterial({ surface: 'rubber', color: 0x282722, roughness: 0.98 });
+    const floorLanding = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.055, 1.58), treadMaterial);
+    floorLanding.position.set(sideX + 0.09, FLOOR_Y - 0.028, -4.68);
+    const middleStep = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.07, 1.48), treadMaterial);
+    middleStep.position.set(sideX + 0.35, 0.82, -4.68);
+    const lowerStep = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.065, 1.36), treadMaterial);
+    lowerStep.position.set(sideX + 0.58, 0.61, -4.68);
+    for (const step of [floorLanding, middleStep, lowerStep]) {
+      const edge = new THREE.Mesh(new THREE.BoxGeometry(
+        (step.geometry as THREE.BoxGeometry).parameters.width,
+        0.018,
+        (step.geometry as THREE.BoxGeometry).parameters.depth,
+      ), chrome);
+      edge.position.set(step.position.x + 0.01, step.position.y + 0.04, step.position.z);
+      door.add(edge);
+    }
     const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.055, 0.32), stepLamp);
-    lamp.position.set(sideX + 0.18, 1.02, -4.68);
-    root.add(header, sill, step, lamp);
+    lamp.position.set(sideX + 0.2, 0.96, -4.68);
+    door.add(header, sill, floorLanding, middleStep, lowerStep, lamp);
 
-    const makeLeaf = (hingeZ: number, extension: number, openingDirection: number): void => {
-      const pivot = new THREE.Group();
-      pivot.position.set(outsideX, 2.16, hingeZ);
-      const midZ = extension * 0.41;
-      const body = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.42, 0.82), panel);
-      body.position.set(0, 0, midZ);
-      const glazing = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.94), glassMaterial);
-      glazing.rotation.y = Math.PI / 2;
-      glazing.position.set(0.056, 0.16, midZ);
-      const waist = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.075, 0.78), trim);
-      waist.position.set(0.01, -0.26, midZ);
-      const innerStile = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.33, 0.06), trim);
-      innerStile.position.set(0.01, 0, hingeZ < -4.6 ? 0.79 : -0.79);
-      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.05, 0.21), chrome);
-      handle.position.set(0.07, -0.08, midZ + extension * 0.24);
-      pivot.add(body, glazing, waist, innerStile, handle);
-      root.add(pivot);
-      this.exteriorDoorLeaves.push({ pivot, openingDirection });
+    // Pneumatic cylinder above the doorway and the crank arms attached to each outer leaf
+    // make the synchronised movement mechanically legible.
+    const cylinder = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.08, 10), chrome);
+    cylinder.rotation.x = Math.PI / 2;
+    cylinder.position.set(outsideX - 0.015, 3.02, -4.68);
+    // A second cylinder and its mounting brackets face the saloon. The through-shaft is
+    // shared with the outer pivots, so the mechanism reads as one real assembly.
+    const innerCylinder = cylinder.clone();
+    innerCylinder.position.x = sideX - 0.13;
+    const innerMechanismPlate = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.16, 1.34), trim);
+    innerMechanismPlate.position.set(sideX - 0.105, 2.98, -4.68);
+    door.add(cylinder, innerMechanismPlate, innerCylinder);
+
+    const leafWidth = 0.405;
+    // Full-height leaves run from the saloon floor to the header. The previous 1.42 m
+    // panels started at window-sill height and looked as though they floated over the step.
+    const leafHeight = 1.84;
+    const leafCentreY = 1.98;
+    const makeLeaf = (direction: number, addHandles: boolean): THREE.Group => {
+      const leaf = new THREE.Group();
+      const midZ = direction * leafWidth * 0.5;
+
+      const kickPanel = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.5, leafWidth - 0.045), panel);
+      kickPanel.position.set(0, -0.64, midZ);
+      // A cream inset on both faces separates each leaf clearly from the surrounding body.
+      const outerAccent = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.11, leafWidth - 0.09), accent);
+      outerAccent.position.set(0.05, -0.58, midZ);
+      const innerAccent = outerAccent.clone();
+      innerAccent.position.x = -0.05;
+      const glass = new THREE.Mesh(new THREE.PlaneGeometry(leafWidth - 0.085, 1.08), doorGlass);
+      glass.rotation.y = Math.PI / 2;
+      glass.position.set(0, 0.22, midZ);
+      const topRail = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.075, leafWidth), trim);
+      topRail.position.set(0, leafHeight * 0.5 - 0.038, midZ);
+      const waistRail = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.085, leafWidth), trim);
+      waistRail.position.set(0, -0.34, midZ);
+      const bottomRail = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.075, leafWidth), trim);
+      bottomRail.position.set(0, -leafHeight * 0.5 + 0.038, midZ);
+      leaf.add(kickPanel, outerAccent, innerAccent, glass, topRail, waistRail, bottomRail);
+
+      for (const z of [direction * 0.025, direction * (leafWidth - 0.025)]) {
+        const stile = new THREE.Mesh(new THREE.BoxGeometry(0.095, leafHeight, 0.05), trim);
+        stile.position.z = z;
+        const seal = new THREE.Mesh(new THREE.BoxGeometry(0.115, leafHeight - 0.04, 0.018), rubber);
+        seal.position.z = z + direction * 0.027;
+        leaf.add(stile, seal);
+      }
+
+      // Both faces of the inner leaves get grab bars, so this remains one door rather
+      // than unrelated interior and exterior models.
+      if (addHandles) for (const x of [-0.072, 0.072]) {
+        const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.62, 8), chrome);
+        handle.position.set(x, 0.02, direction * (leafWidth - 0.1));
+        leaf.add(handle);
+        for (const y of [-0.3, 0.34]) {
+          const mount = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.035, 0.055), chrome);
+          mount.position.set(x, y, direction * (leafWidth - 0.1));
+          leaf.add(mount);
+        }
+      }
+      return leaf;
     };
 
-    makeLeaf(-5.54, 1, 1);
-    makeLeaf(-3.82, -1, -1);
+    const makePair = (hingeZ: number, direction: number): void => {
+      const outerPivot = new THREE.Group();
+      outerPivot.position.set(outsideX, leafCentreY, hingeZ);
+      outerPivot.add(makeLeaf(direction, false));
+
+      const innerPivot = new THREE.Group();
+      innerPivot.position.z = direction * leafWidth;
+      innerPivot.add(makeLeaf(direction, true));
+      outerPivot.add(innerPivot);
+
+      const centreHinge = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 1.78, 9), chrome);
+      centreHinge.position.z = direction * leafWidth;
+      outerPivot.add(centreHinge);
+      const driveArm = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.035, leafWidth * 0.82), chrome);
+      driveArm.position.set(-0.22, 0.93, direction * leafWidth * 0.41);
+      const fixedHinge = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 1.78, 9), chrome);
+      fixedHinge.position.set(-0.04, 0, 0);
+      const topCrank = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.03, 12), chrome);
+      topCrank.position.set(-0.18, 0.93, 0);
+      outerPivot.add(driveArm, fixedHinge, topCrank);
+
+      door.add(outerPivot);
+      this.exteriorDoorPairs.push({ outerPivot, innerPivot, foldDirection: direction });
+    };
+
+    makePair(-5.52, 1);
+    makePair(-3.84, -1);
   }
 
   private addCoachLights(root: THREE.Group, front: number, back: number): void {
@@ -663,6 +797,14 @@ export class Cabin {
       const lens = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.17, 0.022), headlamp);
       lens.position.set(x, 1.14, front - 0.222);
       root.add(lens);
+
+      // Separate amber indicators make the front read as a road-going vehicle rather
+      // than two floating headlamp rectangles.
+      const indicatorHousing = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.13, 0.055), housing);
+      indicatorHousing.position.set(x, 0.94, front - 0.184);
+      const indicator = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.075, 0.022), marker);
+      indicator.position.set(x, 0.94, front - 0.222);
+      root.add(indicatorHousing, indicator);
     }
     // An inset grille and five bars give the flat front a believable diesel cooling bay.
     const grille = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.32, 0.035), housing);
@@ -693,6 +835,31 @@ export class Cabin {
       bumper.position.set(0, 0.68, z);
       root.add(bumper);
     }
+
+    // Rubber bumper guards and a towing eye add depth to the otherwise broad flat face.
+    for (const x of [-0.88, 0.88]) {
+      const guard = new THREE.Mesh(
+        new THREE.BoxGeometry(0.13, 0.27, 0.16),
+        createRetroMaterial({ color: 0x191a19, snap: 0.18 }),
+      );
+      guard.position.set(x, 0.72, front - 0.29);
+      root.add(guard);
+    }
+    const towEye = new THREE.Mesh(
+      new THREE.TorusGeometry(0.075, 0.018, 7, 14),
+      createRetroMaterial({ color: 0x343735, snap: 0.16, ambientBoost: 1.12 }),
+    );
+    towEye.position.set(0.52, 0.57, front - 0.275);
+    root.add(towEye);
+  }
+
+  /** The outer skin is hidden from the seated eye, but must exist for on-foot views. */
+  setExteriorVisibleToDriver(visible: boolean): void {
+    if (visible === this.exteriorVisibleToDriver) return;
+    this.exteriorVisibleToDriver = visible;
+    const layer = visible ? LAYER_WORLD : LAYER_MIRROR_ONLY;
+    this.exterior.traverse((child) => child.layers.set(layer));
+    this.passengerDoor.traverse((child) => child.layers.set(LAYER_WORLD));
   }
 
   private addCoachWheels(root: THREE.Group): void {
@@ -790,11 +957,18 @@ export class Cabin {
     this.doorTarget = open ? 1 : 0;
   }
 
+  get doorOpenAmount(): number {
+    return this.doorOpen;
+  }
+
   /** Smooth door movement is kept here with the body, rather than in interaction logic. */
   updateExterior(dt: number): void {
-    this.doorOpen += (this.doorTarget - this.doorOpen) * (1 - Math.exp(-dt * 7));
-    for (const leaf of this.exteriorDoorLeaves) {
-      leaf.pivot.rotation.y = leaf.openingDirection * this.doorOpen * 1.22;
+    this.doorOpen += (this.doorTarget - this.doorOpen) * (1 - Math.exp(-dt * 5.2));
+    const t = this.doorOpen * this.doorOpen * (3 - 2 * this.doorOpen);
+    const fold = t * 1.47;
+    for (const pair of this.exteriorDoorPairs) {
+      pair.outerPivot.rotation.y = pair.foldDirection * fold;
+      pair.innerPivot.rotation.y = pair.foldDirection * -2 * fold;
     }
   }
 

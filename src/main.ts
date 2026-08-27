@@ -261,7 +261,6 @@ function choiceSceneForStop(stopId: StoryStopId): ChoiceScene | null {
 
 const interactions = new Interactions(storyStops, story, hud, (stop) => {
   heldAtStoryStop = false;
-  cabin.setDoorOpen(true);
   const acts = {
     'mile86': 'mile86',
     'closed-gas': 'gas',
@@ -273,7 +272,6 @@ const interactions = new Interactions(storyStops, story, hud, (stop) => {
   story.setAct(acts[stop.id]);
   persistShift();
 }, (stop) => {
-  cabin.setDoorOpen(false);
   if (stop.id === 'millers-gas' && story.has('inspected:millers.receipt') && !story.has('miller.returned')) {
     const nora = roster.find('nora-vale');
     const noraWasMirror = nora?.where === 'mirror';
@@ -300,7 +298,7 @@ const interactions = new Interactions(storyStops, story, hud, (stop) => {
   }
   const choiceScene = choiceSceneForStop(stop.id);
   if (choiceScene) openChoice(choiceScene, stop.id);
-}, persistShift, persistShift);
+}, persistShift, persistShift, (open) => cabin.setDoorOpen(open), () => cabin.doorOpenAmount);
 
 function openChoice(choiceScene: ChoiceScene, stopId: StoryStopId): void {
   if (choices.active || story.has(`choice:${choiceScene}`)) return;
@@ -668,8 +666,12 @@ input.on('toggleLang', () => {
 input.on('toggleJournal', () => {
   if (!endingScreen.visible) journal.toggle(story);
 });
-input.on('highBeam', () => { bus.highBeam = !bus.highBeam; });
-input.on('autopilot', () => { bus.autopilot = !bus.autopilot; });
+input.on('highBeam', () => {
+  if (!interactions.onFoot && !interactions.transitioning) bus.highBeam = !bus.highBeam;
+});
+input.on('autopilot', () => {
+  if (!interactions.onFoot && !interactions.transitioning) bus.autopilot = !bus.autopilot;
+});
 input.on('inspect', () => {
   inspect = inspect + 1 >= INSPECT_VIEWS.length ? -1 : inspect + 1;
   if (inspect < 0) {
@@ -677,10 +679,15 @@ input.on('inspect', () => {
     camera.updateProjectionMatrix();
   }
 });
-input.on('radioPower', () => { cabin.dashboard.requestRadioPower(); });
-input.on('radioSeek', () => { cabin.dashboard.requestRadioSeek(1); });
+input.on('radioPower', () => {
+  if (!interactions.onFoot && !interactions.transitioning) cabin.dashboard.requestRadioPower();
+});
+input.on('radioSeek', () => {
+  if (!interactions.onFoot && !interactions.transitioning) cabin.dashboard.requestRadioSeek(1);
+});
 input.on('horn', () => {
-  if (!interactions.onFoot) {
+  if (interactions.transitioning) return;
+  if (!interactions.onFoot && !interactions.transitioning) {
     engineAudio?.hiss(0.45, 0.18);
     return;
   }
@@ -911,7 +918,7 @@ const loop = new Loop((dt, elapsed) => {
     // quietly rolls past it. Journal and choice screens hold this single-player moment.
     const narrativeLocked = choices.active || journal.visible;
     if (scriptedStop) updateScriptedStop(dt);
-    else if (!interactions.onFoot && !heldByPatrol && !heldAtStoryStop && !narrativeLocked) bus.update(dt, input);
+    else if (!interactions.onFoot && !interactions.transitioning && !heldByPatrol && !heldAtStoryStop && !narrativeLocked) bus.update(dt, input);
     clock.syncRoute(bus.miles);
 
     routeState.mile = bus.miles;
@@ -967,11 +974,18 @@ const loop = new Loop((dt, elapsed) => {
   // Keep the housing alive for the whole eased camera move, not merely while the physical
   // key is down. This also prevents a black/pop frame when Q is released.
   cabin.leftMirror.mesh.visible = leftMirrorGlance > 0.01 || input.isDown('lookLeft') || leftMirrorLatched;
-  if (choices.active || endingScreen.visible) hud.prompt(null);
+  if (choices.active || endingScreen.visible) {
+    interactions.updateTransition();
+    hud.prompt(null);
+  }
   else interactions.update(dt, bus, input);
   // The arms, torso and legs are the player character, not a second seated NPC.
   // Hide them for every on-foot mission and restore them on re-entry to the coach.
-  cabin.dashboard.setDriverVisible(!interactions.onFoot);
+  const driverSeated = !interactions.onFoot;
+  const driverAtControls = driverSeated && !interactions.transitioning;
+  cabin.dashboard.setDriverVisible(driverSeated);
+  cabin.dashboard.setDriverControlsEnabled(driverAtControls);
+  cabin.setExteriorVisibleToDriver(interactions.onFoot);
   cabin.updateExterior(dt);
   placeCamera(dt);
   // The desert is still a moonlit outdoor space, not a black void. The torch is for
@@ -1004,17 +1018,19 @@ const loop = new Loop((dt, elapsed) => {
     rpm: bus.rpm,
     wheelAngle: bus.wheelAngle,
     gear: bus.gear,
-    forwardPressed: input.isDown('throttle'),
-    reversePressed: input.isDown('brake'),
+    forwardPressed: driverAtControls && input.isDown('throttle'),
+    reversePressed: driverAtControls && input.isDown('brake'),
     miles: bus.miles,
     clock: clock.format(),
     highBeam: bus.highBeam,
-    radioTuneDirection: input.axis('radioDown', 'radioUp'),
+    radioTuneDirection: driverAtControls ? input.axis('radioDown', 'radioUp') : 0,
   });
   if (radio) {
-    if (dashboardActions.radioPowerPress) radio.togglePower();
-    if (dashboardActions.radioSeekDirection !== 0) radio.seek(dashboardActions.radioSeekDirection);
-    radio.tune(dashboardActions.radioTuneDirection, dt);
+    if (driverAtControls && dashboardActions.radioPowerPress) radio.togglePower();
+    if (driverAtControls && dashboardActions.radioSeekDirection !== 0) {
+      radio.seek(dashboardActions.radioSeekDirection);
+    }
+    if (driverAtControls) radio.tune(dashboardActions.radioTuneDirection, dt);
     radio.update(dt);
     cabin.dashboard.setRadio(radio.needle, radio.readout, radio.power);
   }
