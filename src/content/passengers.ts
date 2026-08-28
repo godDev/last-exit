@@ -1,4 +1,5 @@
 import type { PassengerSpec } from '../bus/passengers';
+import { NORA_RED_LOOK } from './passengerLooks';
 
 export interface PassengerProfile extends PassengerSpec {
   name: string;
@@ -22,7 +23,7 @@ export const PASSENGERS: PassengerProfile[] = [
   { id: 'claire-dunn', name: 'Claire Dunn', role: 'waitress', roleRu: 'официантка', boarded: 1986, row: 7, side: 1, coat: 0x40372c, clue: 'Her name appears in the original passenger manifest.', clueRu: 'Её имя есть в исходном манифесте пассажиров.' },
   { id: 'samuel-reeves', name: 'Samuel Reeves', role: 'radio repairman', roleRu: 'радиомастер', boarded: 1986, row: 8, side: -1, coat: 0x453c30, clue: 'He can identify a broadcast that has not been transmitted yet.', clueRu: 'Он может узнать передачу, которую ещё не транслировали.' },
   { id: 'wendy-kerr', name: 'Wendy Kerr', role: 'runaway', roleRu: 'сбежавшая из дома', boarded: 1986, row: 9, side: 1, coat: 0x353b34, clue: 'Her missing-person notice was printed in 1986.', clueRu: 'Объявление о её пропаже напечатано в 1986 году.' },
-  { id: 'nora-vale', name: 'Nora Vale', role: 'unknown traveller', roleRu: 'неизвестная путешественница', boarded: 2026, row: 10, side: -1, coat: 0x2f2a2a, clue: 'A receipt from Miller’s Gas is dated October 2026.', clueRu: 'Чек Miller’s Gas датирован октябрём 2026 года.' },
+  { id: 'nora-vale', name: 'Nora Vale', role: 'unknown traveller', roleRu: 'неизвестная путешественница', boarded: 2026, row: 10, side: -1, coat: NORA_RED_LOOK.dress, look: NORA_RED_LOOK.id, clue: 'A receipt from Miller’s Gas is dated October 2026.', clueRu: 'Чек Miller’s Gas датирован октябрём 2026 года.' },
 ];
 
 export const INITIAL_PASSENGERS = ['marian-cole', 'ray-hollis', 'helen-pike'];

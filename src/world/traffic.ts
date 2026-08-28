@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { createPBRMaterial, enablePBRShadows } from '../render/pbrMaterial';
 import { canvasTexture } from '../render/textures';
+import type { Bus } from '../bus/drive';
 import { RoutePath } from './curvature';
 
 /** Sparse, pooled highway traffic. Vehicle forward is +Z. */
@@ -17,6 +18,103 @@ interface Vehicle {
   speed: number;
   direction: 1 | -1;
   lateral: number;
+  horned: boolean;
+  crashed: boolean;
+  alongVelocity: number;
+  lateralVelocity: number;
+  yawOffset: number;
+  yawVelocity: number;
+  roll: number;
+  rollVelocity: number;
+  damage: number;
+  damageRoot: THREE.Group;
+}
+
+export interface TrafficImpact {
+  readonly kind: Kind;
+  readonly normal: THREE.Vector3;
+  readonly penetration: number;
+  readonly severity: number;
+  readonly otherMass: number;
+  readonly otherAlongSpeed: number;
+}
+
+export interface TrafficUpdate {
+  readonly horn: Kind | null;
+  readonly impact: TrafficImpact | null;
+}
+
+const BUS_HALF_LENGTH = 6.1;
+const BUS_HALF_WIDTH = 1.33;
+
+function vehicleDimensions(vehicle: Vehicle): { centre: number; halfLength: number; halfWidth: number; mass: number } {
+  return vehicle.kind === 'truck'
+    ? { centre: -1.7, halfLength: 8.65, halfWidth: 1.22, mass: 8_500 }
+    : { centre: 0, halfLength: 2.45, halfWidth: 0.96, mass: 1_500 };
+}
+
+function crackTexture(): THREE.Texture {
+  return canvasTexture(256, 128, (ctx, w, h) => {
+    ctx.strokeStyle = 'rgba(205,224,232,.86)';
+    ctx.lineWidth = 1.35;
+    const origins: Array<[number, number]> = [[w * 0.46, h * 0.52], [w * 0.7, h * 0.36]];
+    for (let origin = 0; origin < origins.length; origin++) {
+      const [cx, cy] = origins[origin];
+      for (let ray = 0; ray < 9; ray++) {
+        const angle = ray * Math.PI * 2 / 9 + origin * 0.27;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        for (let step = 1; step <= 4; step++) {
+          const radius = step * (10 + origin * 3);
+          ctx.lineTo(cx + Math.cos(angle + Math.sin(step * 2.3) * 0.1) * radius, cy + Math.sin(angle) * radius * 0.62);
+        }
+        ctx.stroke();
+      }
+      for (const radius of [7, 13, 21]) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0.2 + origin, Math.PI * 1.65 + origin);
+        ctx.stroke();
+      }
+    }
+  });
+}
+
+function buildVehicleDamage(kind: Kind): THREE.Group {
+  const root = new THREE.Group();
+  root.name = `${kind}-persistent-collision-damage`;
+  const bentMetal = mat(0x25282a, 0.88);
+  const exposedMetal = mat(0x66635b, 1.4);
+  const brokenLamp = mat(0x32100d, 0.8);
+  const front = kind === 'truck' ? 6.93 : 2.39;
+  const width = kind === 'truck' ? 2.18 : 1.72;
+  const panelY = kind === 'truck' ? 1.15 : 0.79;
+
+  const crushedPanel = box(root, bentMetal, [width, kind === 'truck' ? 0.72 : 0.42, 0.12], [0, panelY, front + 0.055]);
+  crushedPanel.rotation.x = -0.12;
+  crushedPanel.rotation.z = 0.045;
+  for (const side of [-1, 1]) {
+    const crease = box(root, exposedMetal, [0.055, kind === 'truck' ? 0.68 : 0.38, 0.07], [side * width * 0.31, panelY, front + 0.13]);
+    crease.rotation.z = side * 0.34;
+    const lamp = box(root, brokenLamp, [kind === 'truck' ? 0.46 : 0.34, 0.15, 0.035], [side * width * 0.32, panelY + 0.08, front + 0.16]);
+    lamp.rotation.z = side * 0.09;
+  }
+
+  const cracks = new THREE.Mesh(
+    new THREE.PlaneGeometry(kind === 'truck' ? 1.88 : 1.27, kind === 'truck' ? 0.7 : 0.47),
+    new THREE.MeshBasicMaterial({
+      map: crackTexture(),
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    }),
+  );
+  cracks.position.set(0, kind === 'truck' ? 2.68 : 1.44, kind === 'truck' ? 4.94 : 1.005);
+  cracks.rotation.x = kind === 'truck' ? -0.08 : -0.28;
+  root.add(cracks);
+  root.visible = false;
+  return root;
 }
 
 function glareTexture(inner: string, outer: string): THREE.Texture {
@@ -204,6 +302,8 @@ export class Traffic {
 
     const build = (kind: Kind, index: number): Vehicle => {
       const object = kind === 'truck' ? buildTruck(paints[(index + 2) % paints.length]) : buildCar(paints[index % paints.length]);
+      const damageRoot = buildVehicleDamage(kind);
+      object.add(damageRoot);
       const isTruck = kind === 'truck';
       const halfWidth = isTruck ? 0.88 : 0.68;
       const front = isTruck ? 6.94 : 2.42;
@@ -217,7 +317,25 @@ export class Traffic {
       enablePBRShadows(object);
       object.visible = false;
       this.group.add(object);
-      return { kind, object, active: false, distance: 0, speed: 0, direction: -1, lateral: -1.9 };
+      return {
+        kind,
+        object,
+        active: false,
+        distance: 0,
+        speed: 0,
+        direction: -1,
+        lateral: -1.9,
+        horned: false,
+        crashed: false,
+        alongVelocity: 0,
+        lateralVelocity: 0,
+        yawOffset: 0,
+        yawVelocity: 0,
+        roll: 0,
+        rollVelocity: 0,
+        damage: 0,
+        damageRoot,
+      };
     };
 
     for (let i = 0; i < 3; i++) this.pool.push(build('car', i));
@@ -233,6 +351,14 @@ export class Traffic {
     if (oncoming) this.hasSpawnedOncoming = true;
     free.active = true;
     free.object.visible = true;
+    free.horned = false;
+    free.crashed = false;
+    free.alongVelocity = 0;
+    free.lateralVelocity = 0;
+    free.yawOffset = 0;
+    free.yawVelocity = 0;
+    free.roll = 0;
+    free.rollVelocity = 0;
     free.direction = oncoming ? -1 : 1;
     if (oncoming) {
       free.distance = busDistance + 470;
@@ -245,7 +371,23 @@ export class Traffic {
     }
   }
 
-  update(dt: number, busDistance: number): void {
+  private placeVehicle(vehicle: Vehicle): void {
+    const frame = this.path.sample(vehicle.distance);
+    const rx = -Math.cos(frame.heading);
+    const rz = Math.sin(frame.heading);
+    vehicle.object.position.set(
+      frame.pos.x + rx * vehicle.lateral,
+      frame.pos.y,
+      frame.pos.z + rz * vehicle.lateral,
+    );
+    const baseHeading = vehicle.direction === 1 ? frame.heading : frame.heading + Math.PI;
+    vehicle.object.rotation.set(0, baseHeading + vehicle.yawOffset, vehicle.roll, 'YXZ');
+  }
+
+  update(dt: number, bus: Bus, canInteract = true): TrafficUpdate {
+    const busDistance = bus.distance;
+    let horn: Kind | null = null;
+    let impact: TrafficImpact | null = null;
     this.timer -= dt;
     if (this.timer <= 0) {
       this.spawn(busDistance);
@@ -253,19 +395,100 @@ export class Traffic {
     }
     for (const v of this.pool) {
       if (!v.active) continue;
-      v.distance += v.direction * v.speed * dt;
+      if (v.crashed) {
+        v.distance += v.alongVelocity * dt;
+        v.lateral += v.lateralVelocity * dt;
+        v.yawOffset += v.yawVelocity * dt;
+        v.roll += v.rollVelocity * dt;
+        const groundDrag = Math.exp(-dt * 0.72);
+        const sideDrag = Math.exp(-dt * 1.35);
+        v.alongVelocity *= groundDrag;
+        v.lateralVelocity *= sideDrag;
+        v.yawVelocity *= Math.exp(-dt * 1.1);
+        v.rollVelocity += (-v.roll * 8.5 - v.rollVelocity * 4.8) * dt;
+      } else {
+        v.distance += v.direction * v.speed * dt;
+      }
       const ahead = v.distance - busDistance;
-      if (ahead < -55 || ahead > 540) {
+      if (ahead < -90 || ahead > 540 || Math.abs(v.lateral) > 18) {
         v.active = false;
         v.object.visible = false;
         continue;
       }
-      const frame = this.path.sample(v.distance);
-      const rx = -Math.cos(frame.heading);
-      const rz = Math.sin(frame.heading);
-      v.object.position.set(frame.pos.x + rx * v.lateral, frame.pos.y, frame.pos.z + rz * v.lateral);
-      v.object.rotation.set(0, v.direction === 1 ? frame.heading : frame.heading + Math.PI, 0);
+
+      const dimensions = vehicleDimensions(v);
+      const vehicleCentre = v.distance + v.direction * dimensions.centre;
+      const centreGap = vehicleCentre - busDistance;
+      const closingSpeed = Math.max(0, bus.speed - v.direction * v.speed);
+      const lateralGap = Math.abs(bus.lateral - v.lateral);
+      const contactDistance = BUS_HALF_LENGTH + dimensions.halfLength;
+
+      // An oncoming driver only leans on the horn when both vehicles occupy the same lane
+      // and the time-to-contact has fallen below roughly two and a half seconds.
+      if (canInteract && !v.crashed && !v.horned && v.direction === -1 && centreGap > contactDistance) {
+        const timeToContact = (centreGap - contactDistance) / Math.max(0.1, closingSpeed);
+        if (lateralGap < BUS_HALF_WIDTH + dimensions.halfWidth - 0.18 && timeToContact < 2.45) {
+          v.horned = true;
+          horn ??= v.kind;
+        }
+      }
+
+      if (canInteract && !impact) {
+        const longitudinalPenetration = contactDistance - Math.abs(centreGap);
+        const lateralPenetration = BUS_HALF_WIDTH + dimensions.halfWidth - lateralGap;
+        if (longitudinalPenetration > 0 && lateralPenetration > 0) {
+          const frame = this.path.sample(busDistance);
+          const forward = new THREE.Vector3(Math.sin(frame.heading), 0, Math.cos(frame.heading));
+          const right = new THREE.Vector3(-Math.cos(frame.heading), 0, Math.sin(frame.heading));
+          const normal = longitudinalPenetration < lateralPenetration
+            ? forward.multiplyScalar(centreGap >= 0 ? -1 : 1)
+            : right.multiplyScalar(bus.lateral >= v.lateral ? 1 : -1);
+          const penetration = Math.min(longitudinalPenetration, lateralPenetration);
+          if (v.crashed) {
+            // A wreck remains a solid obstacle after the first impact. Separate the coach
+            // every frame of continued contact, but do not repeatedly add cosmetic damage.
+            bus.blockByVehicle(normal, penetration);
+            this.placeVehicle(v);
+            continue;
+          }
+          const relativeAlong = bus.speed - v.direction * v.speed;
+          const severity = THREE.MathUtils.clamp(Math.abs(relativeAlong) / 48, 0.18, 1);
+          const sideOffset = THREE.MathUtils.clamp((v.lateral - bus.lateral) / (BUS_HALF_WIDTH + dimensions.halfWidth), -1, 1);
+          const throwSide = Math.abs(sideOffset) > 0.06
+            ? Math.sign(sideOffset)
+            : (((Math.floor(v.distance * 0.17) & 1) === 0) ? -1 : 1);
+          const restitution = 0.1;
+          const busMass = 11_000;
+          const vehicleAlong = v.direction * v.speed;
+
+          // One-dimensional momentum conservation handles the violent fore/aft exchange;
+          // the small off-centre component produces the believable spin into the shoulder.
+          v.alongVelocity = (
+            (dimensions.mass - restitution * busMass) * vehicleAlong
+            + (1 + restitution) * busMass * bus.speed
+          ) / (busMass + dimensions.mass);
+          v.lateralVelocity = throwSide * (2.2 + severity * (v.kind === 'truck' ? 3.6 : 7.2));
+          v.yawVelocity = throwSide * (0.45 + severity * (v.kind === 'truck' ? 0.85 : 1.8));
+          v.rollVelocity = -throwSide * (0.18 + severity * (v.kind === 'truck' ? 0.3 : 0.75));
+          v.crashed = true;
+          v.damage = THREE.MathUtils.clamp(v.damage + 0.38 + severity * 0.62, 0, 1);
+          v.damageRoot.visible = true;
+          v.damageRoot.scale.set(0.92 + v.damage * 0.08, 0.82 + v.damage * 0.18, 0.75 + v.damage * 0.25);
+
+          impact = {
+            kind: v.kind,
+            normal,
+            penetration,
+            severity,
+            otherMass: dimensions.mass,
+            otherAlongSpeed: vehicleAlong,
+          };
+        }
+      }
+
+      this.placeVehicle(v);
     }
+    return { horn, impact };
   }
 
   glareAt(busDistance: number): number {

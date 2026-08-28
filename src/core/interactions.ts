@@ -22,6 +22,8 @@ export class Interactions {
   private readonly position = new THREE.Vector3();
   private readonly direction = new THREE.Vector3();
   private readonly up = new THREE.Vector3(0, 1, 0);
+  private readonly busRight = new THREE.Vector3();
+  private readonly busForward = new THREE.Vector3();
   private lookYaw = 0;
   private lookPitch = 0;
   private activeStop: StopSpec | null = null;
@@ -86,7 +88,9 @@ export class Interactions {
     move.addScaledVector(forward, input.axis('brake', 'throttle'));
     move.addScaledVector(right, input.axis('left', 'right'));
     const walkSpeed = input.isDown('sprint') ? 5.0 : 2.8;
-    if (move.lengthSq() > 0) this.position.addScaledVector(move.normalize(), dt * walkSpeed);
+    // Cap a single walking step below the collision capsule radius so a long frame cannot
+    // tunnel through the thin coach wall.
+    if (move.lengthSq() > 0) this.position.addScaledVector(move.normalize(), Math.min(dt, 0.05) * walkSpeed);
 
     // The zone is a generous circle centred on the door. The old 13 m radius could be
     // reached before some scenery had been inspected and felt like movement had broken.
@@ -97,19 +101,23 @@ export class Interactions {
     // Story props are physical during an exterior scene: walls, pumps, counters and door
     // leaves all push the walking camera out instead of letting it cut through the model.
     this.stops.resolveWalkCollision(this.position);
+    this.resolveBusCollision(bus);
 
-    // Follow the actual procedural surface under the player, including shoulder slope and
-    // desert undulation. Binding Y to the parked bus worked only near the door and caused
-    // the camera to sink into raised terrain farther into the field.
-    const standingEyeY = bus.groundHeightAt(this.position) + 1.68;
-    this.position.y += (standingEyeY - this.position.y) * Math.min(1, dt * 18);
+    // Outside, follow the procedural terrain. Inside the doorway, climb the visible lower
+    // and middle treads before settling at the saloon floor height.
+    const standingEyeY = this.standingEyeHeight(bus);
+    this.position.y += (standingEyeY - this.position.y) * Math.min(1, dt * 10);
 
-    const atDoor = this.position.distanceTo(door.setY(this.position.y)) < 2.1;
+    const local = this.busLocalPosition(bus);
+    const insideDoorway = local.right < 1.22
+      && local.right > 0.35
+      && local.forward > 3.82
+      && local.forward < 5.54;
     const buildingDoor = this.stops.doorNear(this.position);
     const inspect = this.stops.inspectableNear(this.position);
     const missing = this.missingEvidence();
     this.ui.prompt(
-      atDoor
+      insideDoorway
         ? missing.length > 0
           ? (settings.lang === 'ru' ? 'СНАЧАЛА НАЙДИ УЛИКУ' : 'FIND THE CLUE FIRST')
           : (settings.lang === 'ru' ? 'E  ВОЙТИ В АВТОБУС' : 'E  RETURN TO BUS')
@@ -122,8 +130,8 @@ export class Interactions {
           : null,
     );
     if (!input.wasTapped('interact')) return;
-    if (atDoor && missing.length === 0) this.enter();
-    else if (atDoor) this.ui.say(null,
+    if (insideDoorway && missing.length === 0) this.enter();
+    else if (insideDoorway) this.ui.say(null,
       settings.lang === 'ru' ? 'СЦЕНА НЕ ЗАКОНЧЕНА.' : 'THE SCENE IS NOT FINISHED.',
       settings.lang === 'ru' ? 'Осмотри нужные предметы, затем возвращайся в автобус.' : 'Inspect the important objects, then return to the bus.',
       3,
@@ -139,6 +147,119 @@ export class Interactions {
       );
     }
     else if (inspect) this.inspect(inspect.id);
+  }
+
+  /** Position in bus-local coordinates: +right is the passenger door, +forward the nose. */
+  private busLocalPosition(bus: Bus): { right: number; forward: number } {
+    this.busRight.copy(bus.rightVector);
+    this.busForward.copy(bus.forwardVector);
+    const dx = this.position.x - bus.position.x;
+    const dz = this.position.z - bus.position.z;
+    return {
+      right: dx * this.busRight.x + dz * this.busRight.z,
+      forward: dx * this.busForward.x + dz * this.busForward.z,
+    };
+  }
+
+  /** A capsule against four coach walls, with one opening matching the folding doorway. */
+  private resolveBusCollision(bus: Bus): void {
+    const local = this.busLocalPosition(bus);
+    let x = local.right;
+    let z = local.forward;
+    const radius = 0.28;
+    const halfWidth = 1.43;
+    const halfLength = 6.12;
+    const doorRear = 3.74;
+    const doorFront = 5.62;
+    const doorPassable = this.getBusDoorOpen() >= 0.88;
+
+    const pushFromSegment = (ax: number, az: number, bx: number, bz: number): void => {
+      const sx = bx - ax;
+      const sz = bz - az;
+      const lengthSq = sx * sx + sz * sz;
+      const t = THREE.MathUtils.clamp(((x - ax) * sx + (z - az) * sz) / lengthSq, 0, 1);
+      const closestX = ax + sx * t;
+      const closestZ = az + sz * t;
+      let nx = x - closestX;
+      let nz = z - closestZ;
+      const distanceSq = nx * nx + nz * nz;
+      if (distanceSq >= radius * radius) return;
+
+      let distance = Math.sqrt(distanceSq);
+      if (distance < 0.0001) {
+        // Choose the side the camera already occupies when it lands exactly on a wall.
+        if (Math.abs(sx) < Math.abs(sz)) nx = x >= ax ? 1 : -1;
+        else nz = z >= az ? 1 : -1;
+        distance = 1;
+      } else {
+        nx /= distance;
+        nz /= distance;
+      }
+      const correction = radius - (distanceSq < 0.0001 ? 0 : distance);
+      x += nx * correction;
+      z += nz * correction;
+    };
+
+    const pushFromBox = (
+      minX: number,
+      maxX: number,
+      minZ: number,
+      maxZ: number,
+      clearance = 0.18,
+    ): void => {
+      const left = minX - clearance;
+      const right = maxX + clearance;
+      const rear = minZ - clearance;
+      const front = maxZ + clearance;
+      if (x <= left || x >= right || z <= rear || z >= front) return;
+      const distances = [x - left, right - x, z - rear, front - z];
+      const nearest = Math.min(...distances);
+      if (nearest === distances[0]) x = left;
+      else if (nearest === distances[1]) x = right;
+      else if (nearest === distances[2]) z = rear;
+      else z = front;
+    };
+
+    pushFromSegment(-halfWidth, -halfLength, -halfWidth, halfLength);
+    pushFromSegment(-halfWidth, halfLength, halfWidth, halfLength);
+    pushFromSegment(halfWidth, -halfLength, halfWidth, doorRear);
+    if (!doorPassable) pushFromSegment(halfWidth, doorRear, halfWidth, doorFront);
+    pushFromSegment(halfWidth, doorFront, halfWidth, halfLength);
+    pushFromSegment(halfWidth, -halfLength, -halfWidth, -halfLength);
+
+    // Eleven paired passenger benches. Their collider includes the seated passenger, arm
+    // rests and backrest, while retaining a narrow but continuous central aisle.
+    for (let row = 0; row < 11; row++) {
+      const seatForward = 3.05 - row * 0.82;
+      pushFromBox(-1.24, -0.26, seatForward - 0.38, seatForward + 0.38);
+      pushFromBox(0.26, 1.24, seatForward - 0.38, seatForward + 0.38);
+    }
+
+    // Front-cabin equipment is not part of the passenger grid.
+    pushFromBox(-1.0, -0.44, 4.38, 5.02, 0.2);  // driver's seat and seated body
+    pushFromBox(-0.28, -0.02, 5.18, 5.5, 0.16); // fare box
+    pushFromBox(-1.22, 1.04, 5.5, 5.98, 0.16);  // dashboard and knee panel
+
+    this.position.x = bus.position.x + this.busRight.x * x + this.busForward.x * z;
+    this.position.z = bus.position.z + this.busRight.z * x + this.busForward.z * z;
+  }
+
+  private standingEyeHeight(bus: Bus): number {
+    const local = this.busLocalPosition(bus);
+    const onDoorAxis = local.forward > 3.72 && local.forward < 5.64;
+    const insideBody = local.right < 1.43
+      && local.right > -1.43
+      && local.forward > -6.12
+      && local.forward < 6.12;
+    let feetY = bus.groundHeightAt(this.position);
+
+    if (insideBody) feetY = bus.position.y + 1.05;
+    else if (onDoorAxis && local.right < 2.12) {
+      if (local.right > 1.82) feetY = bus.position.y + 0.64;
+      else if (local.right > 1.52) feetY = bus.position.y + 0.86;
+      else feetY = bus.position.y + 1.05;
+    }
+    return feetY + 1.68;
   }
 
   placeCamera(camera: THREE.PerspectiveCamera, input: Input, dt: number): void {

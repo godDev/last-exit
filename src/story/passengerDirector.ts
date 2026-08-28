@@ -1,4 +1,4 @@
-import type { Presence, Roster } from '../bus/passengers';
+import { passengerAppearanceSeed, type Passenger, type Presence, type Roster } from '../bus/passengers';
 import { INITIAL_PASSENGERS, passenger } from '../content/passengers';
 import type { Story } from '../core/story';
 
@@ -27,9 +27,18 @@ export class PassengerDirector {
   board(id: string): boolean {
     const profile = passenger(id);
     if (!profile) return false;
-    if (!this.roster.find(id)) this.roster.board(profile);
+    const saved = this.story.appearance(id);
+    const lookSeed = saved?.lookSeed ?? passengerAppearanceSeed(id);
+    if (!this.roster.find(id)) this.roster.board(profile, lookSeed);
     if (!this.story.state.passengers.includes(id)) this.story.state.passengers.push(id);
+    if (!saved) {
+      this.story.setAppearance(id, { presence: 'both', sway: 1, eyeshine: 0, lookSeed });
+    }
     return true;
+  }
+
+  figure(id: string): Passenger | undefined {
+    return this.roster.find(id);
   }
 
   setAppearance(id: string, appearance: Appearance): void {
@@ -39,6 +48,7 @@ export class PassengerDirector {
       presence: appearance.presence,
       sway: appearance.sway ?? 1,
       eyeshine: appearance.eyeshine ?? 0,
+      lookSeed: this.story.appearance(id)?.lookSeed ?? passengerAppearanceSeed(id),
     };
     figure.setPresence(saved.presence);
     figure.sway = saved.sway;

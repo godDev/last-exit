@@ -57,6 +57,8 @@ export class Bus {
   throttle = 0;
   braking = 0;
   highBeam = false;
+  /** Accumulated body and windscreen damage. It never decays during a shift. */
+  damage = 0;
 
   /** Body motion, consumed by the camera and by the cabin audio. */
   pitch = 0;
@@ -257,6 +259,60 @@ export class Bus {
     this.rumble = Math.max(this.rumble, 0.9);
     this.impactCooldown = 0.42;
     return true;
+  }
+
+  /**
+   * Resolve a collision with another moving vehicle using conservation of momentum along
+   * the road. A sedan is swept aside by the eleven-ton coach; a loaded truck can nearly
+   * stop it. The visual/body impulse shares the same suspension response as static hits.
+   */
+  vehicleImpact(
+    normal: THREE.Vector3,
+    penetration: number,
+    otherMass: number,
+    otherAlongSpeed: number,
+    severity: number,
+  ): boolean {
+    this.position.addScaledVector(normal, Math.max(0.04, penetration + 0.05));
+    if (this.impactCooldown > 0) return false;
+
+    this.updateFrame();
+    const busMass = 11_000;
+    const restitution = 0.1;
+    const before = this.speed;
+    this.speed = THREE.MathUtils.clamp(
+      (
+        (busMass - restitution * otherMass) * before
+        + (1 + restitution) * otherMass * otherAlongSpeed
+      ) / (busMass + otherMass),
+      -MAX_REVERSE_SPEED,
+      MAX_SPEED,
+    );
+
+    const side = THREE.MathUtils.clamp(normal.dot(this.right), -1, 1);
+    const frontal = Math.max(0, -normal.dot(this.forward));
+    this.heading += side * (0.045 + severity * 0.075);
+    this.wheelAngle = THREE.MathUtils.clamp(this.wheelAngle + side * 0.3, -1, 1);
+    this.yawRate += side * severity * 0.32;
+    this.impactPitch -= (0.035 + frontal * 0.075) * severity;
+    this.impactRoll += side * (0.04 + severity * 0.065);
+    this.impactHeave += 0.035 + severity * 0.055;
+    this.rumble = Math.max(this.rumble, 1);
+    this.damage = THREE.MathUtils.clamp(this.damage + 0.12 + severity * 0.34, 0, 1);
+    this.impactCooldown = 0.55;
+    return true;
+  }
+
+  restoreDamage(value: number): void {
+    this.damage = THREE.MathUtils.clamp(Number.isFinite(value) ? value : 0, 0, 1);
+  }
+
+  /** Keep the coach outside an already wrecked vehicle without awarding repeated damage. */
+  blockByVehicle(normal: THREE.Vector3, penetration: number): void {
+    this.position.addScaledVector(normal, Math.max(0.025, penetration + 0.035));
+    this.updateFrame();
+    const motionIntoObstacle = -normal.dot(this.forward) * this.speed;
+    if (motionIntoObstacle > 0) this.speed *= 0.22;
   }
 
   /** Project the free-moving bus back onto the route to get mile and lane position. */

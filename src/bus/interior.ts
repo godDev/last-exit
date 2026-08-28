@@ -16,10 +16,14 @@ import { Mirror, LAYER_DIRECT_ONLY, LAYER_MIRROR_ONLY, LAYER_WORLD } from './mir
  */
 
 export const FLOOR_Y = 1.05;
-export const ROOF_Y = 3.08;
+export const ROOF_Y = 3.48;
 export const HALF_WIDTH = 1.27;
 export const BUS_LENGTH = 12.2;
 export const DRIVER_X = -0.72;
+const WINDOW_BOTTOM_Y = 1.72;
+const WINDOW_TOP_Y = 3.22;
+const WINDOW_CENTER_Y = (WINDOW_BOTTOM_Y + WINDOW_TOP_Y) * 0.5;
+const WINDOW_HEIGHT = WINDOW_TOP_Y - WINDOW_BOTTOM_Y;
 
 export const ROW_COUNT = 11;
 const ROW_SPACING = 0.82;
@@ -81,6 +85,41 @@ const PANEL = 0x2b2721;
 const TRIM = 0x1d1a16;
 const RUBBER = 0x151310;
 const COACH_WHEEL_RADIUS = 0.47;
+const COACH_AXLES = [-3.15, 3.72] as const;
+
+function windshieldCrackTexture(): THREE.Texture {
+  return canvasTexture(512, 256, (ctx, w, h) => {
+    ctx.strokeStyle = 'rgba(210,226,232,.82)';
+    ctx.lineWidth = 1.4;
+    const impacts: Array<[number, number, number]> = [
+      [w * 0.68, h * 0.56, 1],
+      [w * 0.31, h * 0.42, 0.72],
+      [w * 0.52, h * 0.7, 0.55],
+    ];
+    for (let impact = 0; impact < impacts.length; impact++) {
+      const [cx, cy, scale] = impacts[impact];
+      for (let ray = 0; ray < 12; ray++) {
+        const angle = ray * Math.PI * 2 / 12 + impact * 0.19;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        for (let step = 1; step <= 6; step++) {
+          const radius = step * 18 * scale;
+          const wobble = Math.sin(step * 2.1 + ray * 1.7) * 0.08;
+          ctx.lineTo(
+            cx + Math.cos(angle + wobble) * radius,
+            cy + Math.sin(angle + wobble) * radius * 0.72,
+          );
+        }
+        ctx.stroke();
+      }
+      for (const radius of [9, 17, 29, 43]) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * scale, 0.22 + impact * 0.3, Math.PI * 1.82 + impact * 0.2);
+        ctx.stroke();
+      }
+    }
+  });
+}
 
 function buildShell(): THREE.BufferGeometry {
   const front = -BUS_LENGTH / 2;
@@ -158,14 +197,14 @@ function buildShell(): THREE.BufferGeometry {
     for (let i = 0; i < 8; i++) {
       const z = front + 2.2 + i * 1.28;
       if (side > 0 && z > -5.57 && z < -3.79) continue;
-      parts.push(box(0.08, 0.95, 0.11, x, FLOOR_Y + 1.12, z, TRIM));
+      parts.push(box(0.08, WINDOW_HEIGHT + 0.08, 0.11, x, WINDOW_CENTER_Y, z, TRIM));
     }
   }
 
   // windscreen surround and A-pillars
   parts.push(box(HALF_WIDTH * 2, 0.22, 0.1, 0, ROOF_Y - 0.12, front + 0.1, PANEL));
   for (const side of [-1, 1]) {
-    parts.push(box(0.13, 1.6, 0.13, side * (HALF_WIDTH - 0.08), FLOOR_Y + 1.5, front + 0.15, PANEL));
+    parts.push(box(0.13, WINDOW_HEIGHT + 0.18, 0.13, side * (HALF_WIDTH - 0.08), WINDOW_CENTER_Y, front + 0.15, PANEL));
   }
   // The step well remains structural, while the visible door itself is the articulated
   // four-leaf assembly built below. Keeping the old merged slab here would leave a closed
@@ -174,8 +213,8 @@ function buildShell(): THREE.BufferGeometry {
   // rear bulkhead with the emergency door, left open as a frame around the back window
   parts.push(box(HALF_WIDTH * 2, 0.5, 0.09, 0, FLOOR_Y + 0.25, back - 0.05, PANEL));
   parts.push(box(HALF_WIDTH * 2, 0.42, 0.09, 0, ROOF_Y - 0.21, back - 0.05, PANEL));
-  parts.push(box(0.12, 1.35, 0.09, -0.62, FLOOR_Y + 1.18, back - 0.05, TRIM));
-  parts.push(box(0.12, 1.35, 0.09, 0.62, FLOOR_Y + 1.18, back - 0.05, TRIM));
+  parts.push(box(0.12, WINDOW_HEIGHT + 0.08, 0.09, -0.62, WINDOW_CENTER_Y, back - 0.05, TRIM));
+  parts.push(box(0.12, WINDOW_HEIGHT + 0.08, 0.09, 0.62, WINDOW_CENTER_Y, back - 0.05, TRIM));
 
   // grab rails down the aisle
   parts.push(box(0.045, 0.045, length - 4.2, -0.26, ROOF_Y - 0.46, midZ + 0.9, 0x35312a));
@@ -293,6 +332,9 @@ export class Cabin {
   private readonly brakeLampMaterials: THREE.ShaderMaterial[] = [];
   private readonly headlampMaterials: THREE.ShaderMaterial[] = [];
   private readonly exterior: THREE.Group;
+  private readonly exteriorDamage = new THREE.Group();
+  private readonly windshieldDamage: THREE.Mesh;
+  private readonly exteriorWindshieldDamage: THREE.Mesh;
   private exteriorVisibleToDriver = false;
   private doorOpen = 0;
   private doorTarget = 0;
@@ -318,6 +360,31 @@ export class Cabin {
     seats.castShadow = false;
     seats.receiveShadow = false;
     this.exterior = this.buildExterior();
+    const damageTexture = windshieldCrackTexture();
+    const makeCracks = (): THREE.Mesh => new THREE.Mesh(
+      new THREE.PlaneGeometry(2.42, WINDOW_HEIGHT - 0.08),
+      new THREE.MeshBasicMaterial({
+        map: damageTexture,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      }),
+    );
+    this.windshieldDamage = makeCracks();
+    this.windshieldDamage.name = 'interior-persistent-windshield-cracks';
+    this.windshieldDamage.position.set(0, WINDOW_CENTER_Y, -BUS_LENGTH * 0.5 + 0.03);
+    this.windshieldDamage.layers.set(LAYER_DIRECT_ONLY);
+    this.windshieldDamage.renderOrder = 8;
+
+    this.exteriorWindshieldDamage = makeCracks();
+    this.exteriorWindshieldDamage.name = 'exterior-persistent-windshield-cracks';
+    this.exteriorWindshieldDamage.position.set(0, WINDOW_CENTER_Y, -BUS_LENGTH * 0.5 - 0.205);
+    this.exteriorWindshieldDamage.renderOrder = 8;
+    this.exteriorDamage.add(this.exteriorWindshieldDamage);
+    this.buildExteriorCollisionDamage(this.exteriorDamage);
+    this.exterior.add(this.exteriorDamage);
     // The driver is inside this geometry. Rendering it through the direct camera makes
     // the lower body panels clip into view as huge black rectangles when looking down.
     // Mirrors still need the complete coach body, so keep it exclusively on their layer.
@@ -332,7 +399,7 @@ export class Cabin {
     // from the cab while the rest of the exterior skin stays out of the first-person view.
     this.passengerDoor.traverse((child) => child.layers.set(LAYER_WORLD));
     const saloonDetails = this.buildSaloonDetails();
-    this.group.add(shell, seats, saloonDetails, this.exterior);
+    this.group.add(shell, seats, saloonDetails, this.windshieldDamage, this.exterior);
 
     // A row of tired fluorescent-style fixtures: metal bezel, cloudy diffuser and the
     // emissive panel itself. Six smaller pools read more naturally than four bare planes.
@@ -372,6 +439,33 @@ export class Cabin {
     this.group.add(this.leftMirror.mesh);
 
     this.group.add(this.passengerRoot);
+  }
+
+  private buildExteriorCollisionDamage(root: THREE.Group): void {
+    root.name = 'route-coach-persistent-collision-damage';
+    root.visible = false;
+    const bentPaint = createPBRMaterial({ surface: 'paint', color: 0x202a2f, roughness: 0.88 });
+    const bareMetal = createPBRMaterial({ surface: 'metal', color: 0x696863, roughness: 0.7 });
+    const brokenLamp = createPBRMaterial({ surface: 'glass', color: 0x32110c, roughness: 0.92 });
+    const frontZ = -BUS_LENGTH * 0.5 - 0.255;
+
+    const crushedApron = new THREE.Mesh(new THREE.BoxGeometry(2.48, 0.52, 0.11), bentPaint);
+    crushedApron.position.set(0.08, 1.08, frontZ);
+    crushedApron.rotation.set(-0.06, 0, -0.025);
+    root.add(crushedApron);
+    for (const side of [-1, 1]) {
+      const crease = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.58, 0.055), bareMetal);
+      crease.position.set(side * 0.68, 1.13, frontZ - 0.07);
+      crease.rotation.z = side * 0.4;
+      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 0.035), brokenLamp);
+      lamp.position.set(side * 0.94, 1.14, frontZ - 0.08);
+      lamp.rotation.z = side * 0.08;
+      root.add(crease, lamp);
+    }
+    const bentBumper = new THREE.Mesh(new THREE.BoxGeometry(2.65, 0.13, 0.13), bareMetal);
+    bentBumper.position.set(-0.08, 0.7, frontZ - 0.1);
+    bentBumper.rotation.z = -0.035;
+    root.add(bentBumper);
   }
 
   /** Interior-facing glass and cloth kept separate from the merged structural shell. */
@@ -417,23 +511,23 @@ export class Cabin {
       for (let paneIndex = 0; paneIndex < paneZ.length; paneIndex++) {
         const z = paneZ[paneIndex];
         if (side > 0 && z < -3.75) continue;
-        const pane = new THREE.Mesh(new THREE.PlaneGeometry(1.04, 0.96), glass);
+        const pane = new THREE.Mesh(new THREE.PlaneGeometry(1.04, WINDOW_HEIGHT - 0.08), glass);
         pane.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
-        pane.position.set(side * (HALF_WIDTH - 0.045), 2.24, z);
+        pane.position.set(side * (HALF_WIDTH - 0.045), WINDOW_CENTER_Y, z);
         pane.renderOrder = 4;
         root.add(pane);
 
         const curtainColor = paneIndex % 3 === 0 ? 0x4b3d35 : 0x40363a;
         for (const edge of [-1, 1]) {
           const curtainZ = z + edge * 0.48;
-          curtainParts.push(box(0.035, 0.88, 0.15, side * (HALF_WIDTH - 0.09), 2.25, curtainZ, curtainColor));
+          curtainParts.push(box(0.035, WINDOW_HEIGHT - 0.14, 0.15, side * (HALF_WIDTH - 0.09), WINDOW_CENTER_Y, curtainZ, curtainColor));
           // Shallow pleats remain visible as alternating highlights at driving distance.
           for (let pleat = -1; pleat <= 1; pleat++) {
-            curtainParts.push(box(0.02, 0.84, 0.025, side * (HALF_WIDTH - 0.105), 2.25, curtainZ + pleat * 0.042, 0x625047));
+            curtainParts.push(box(0.02, WINDOW_HEIGHT - 0.18, 0.025, side * (HALF_WIDTH - 0.105), WINDOW_CENTER_Y, curtainZ + pleat * 0.042, 0x625047));
           }
         }
       }
-      curtainParts.push(box(0.07, 0.12, 9.9, side * (HALF_WIDTH - 0.08), 2.79, 0.25, 0x302a28));
+      curtainParts.push(box(0.07, 0.12, 9.9, side * (HALF_WIDTH - 0.08), WINDOW_TOP_Y + 0.05, 0.25, 0x302a28));
     }
     const curtains = new THREE.Mesh(
       merged(curtainParts, 'saloon curtains'),
@@ -492,67 +586,180 @@ export class Cabin {
     // recognisable silhouette at headlight range.
     for (const side of [-1, 1]) {
       const x = side * sideX;
-      add(paintParts, 0.11, 0.84, BUS_LENGTH - 0.42, x, 1.17, 0, 0x34444d);
-      add(paintParts, 0.1, 0.16, BUS_LENGTH - 0.5, x + side * 0.012, 1.53, 0, 0xd1c29d);
-      add(paintParts, 0.108, 0.12, BUS_LENGTH - 0.48, x + side * 0.015, 0.83, 0, 0x26323a);
-      add(trimParts, 0.13, 0.055, BUS_LENGTH - 0.4, x + side * 0.025, 0.64, 0, 0x121416);
-      add(trimParts, 0.13, 0.06, BUS_LENGTH - 0.42, x + side * 0.024, 1.67, 0, 0x17191a);
-      add(chromeParts, 0.045, 0.045, BUS_LENGTH - 0.7, x + side * 0.078, 1.46, 0, 0x9b9d93);
+      const addBand = (
+        target: THREE.BufferGeometry[],
+        width: number,
+        height: number,
+        bandLength: number,
+        bandX: number,
+        y: number,
+        zCentre: number,
+        colour: number,
+      ): void => {
+        const start = zCentre - bandLength * 0.5;
+        const end = zCentre + bandLength * 0.5;
+        const spans: Array<[number, number]> = side > 0
+          ? [[start, -5.57], [-3.79, end]]
+          : [[start, end]];
+        for (const [spanStart, spanEnd] of spans) {
+          if (spanEnd <= spanStart) continue;
+          add(target, width, height, spanEnd - spanStart, bandX, y, (spanStart + spanEnd) * 0.5, colour);
+        }
+      };
+      // Every fixed livery strip stops at the passenger-door jambs. The matching paint
+      // inside that gap lives on the moving leaves and therefore disappears when opened.
+      // The large lower skin is built separately with real wheel-arch cut-outs.
+      addBand(paintParts, 0.1, 0.16, BUS_LENGTH - 0.5, x + side * 0.012, 1.53, 0, 0xd1c29d);
+      addBand(paintParts, 0.108, 0.12, BUS_LENGTH - 0.48, x + side * 0.015, 0.83, 0, 0x26323a);
+      addBand(trimParts, 0.13, 0.055, BUS_LENGTH - 0.4, x + side * 0.025, 0.64, 0, 0x121416);
+      addBand(trimParts, 0.13, 0.06, BUS_LENGTH - 0.42, x + side * 0.024, 1.67, 0, 0x17191a);
+      addBand(chromeParts, 0.045, 0.045, BUS_LENGTH - 0.7, x + side * 0.078, 1.46, 0, 0x9b9d93);
 
       // Individual tinted panes read clearly from outside. They sit outside the interior
       // wall and use front-face culling by default, making them invisible from the cabin.
       const paneZ = [-4.44, -3.18, -1.92, -0.66, 0.6, 1.86, 3.12, 4.38];
       if (side < 0) {
         // Driver's sliding window fills the otherwise blank bay ahead of the first saloon pane.
-        addSideGlass(side, 0.62, 1.08, 2.24, -5.22);
-        add(trimParts, 0.08, 1.2, 0.06, x + side * 0.085, 2.23, -5.55, 0x17191a);
-        add(trimParts, 0.08, 1.2, 0.06, x + side * 0.085, 2.23, -4.89, 0x17191a);
+        addSideGlass(side, 0.62, WINDOW_HEIGHT - 0.04, WINDOW_CENTER_Y, -5.22);
+        add(trimParts, 0.08, WINDOW_HEIGHT + 0.08, 0.06, x + side * 0.085, WINDOW_CENTER_Y, -5.55, 0x17191a);
+        add(trimParts, 0.08, WINDOW_HEIGHT + 0.08, 0.06, x + side * 0.085, WINDOW_CENTER_Y, -4.89, 0x17191a);
       }
       for (const z of paneZ) {
         if (side > 0 && z < -3.75) continue; // passenger door occupies the front kerb bay
-        addSideGlass(side, 1.05, 1.02, 2.24, z);
-        add(trimParts, 0.08, 1.18, 0.06, x + side * 0.085, 2.23, z - 0.58, 0x17191a);
-        add(trimParts, 0.08, 1.18, 0.06, x + side * 0.085, 2.23, z + 0.58, 0x17191a);
+        addSideGlass(side, 1.05, WINDOW_HEIGHT - 0.04, WINDOW_CENTER_Y, z);
+        add(trimParts, 0.08, WINDOW_HEIGHT + 0.08, 0.06, x + side * 0.085, WINDOW_CENTER_Y, z - 0.58, 0x17191a);
+        add(trimParts, 0.08, WINDOW_HEIGHT + 0.08, 0.06, x + side * 0.085, WINDOW_CENTER_Y, z + 0.58, 0x17191a);
       }
       // A narrow rear quarter window closes the last dark gap before the emergency exit.
-      addSideGlass(side, 0.62, 1.02, 2.24, 5.2);
-      add(trimParts, 0.08, 1.18, 0.06, x + side * 0.085, 2.23, 4.85, 0x17191a);
-      add(trimParts, 0.08, 1.18, 0.06, x + side * 0.085, 2.23, 5.55, 0x17191a);
-      add(trimParts, 0.08, 0.07, BUS_LENGTH - 1.25, x + side * 0.08, 1.69, 0.15, 0x141618);
-      add(trimParts, 0.08, 0.07, BUS_LENGTH - 1.25, x + side * 0.08, 2.82, 0.15, 0x141618);
+      addSideGlass(side, 0.62, WINDOW_HEIGHT - 0.04, WINDOW_CENTER_Y, 5.2);
+      add(trimParts, 0.08, WINDOW_HEIGHT + 0.08, 0.06, x + side * 0.085, WINDOW_CENTER_Y, 4.85, 0x17191a);
+      add(trimParts, 0.08, WINDOW_HEIGHT + 0.08, 0.06, x + side * 0.085, WINDOW_CENTER_Y, 5.55, 0x17191a);
+      addBand(trimParts, 0.08, 0.07, BUS_LENGTH - 1.25, x + side * 0.08, 1.69, 0.15, 0x141618);
+      addBand(trimParts, 0.08, 0.07, BUS_LENGTH - 1.25, x + side * 0.08, WINDOW_TOP_Y + 0.04, 0.15, 0x141618);
+    }
+
+    // Side skins with a raised lower contour over each tyre. A flat cuboid previously ran
+    // through the wheels and made them look pasted onto the outside of the coach.
+    const archPaint = createPBRMaterial({
+      surface: 'paint',
+      color: 0x34444d,
+      roughness: 0.48,
+      side: THREE.DoubleSide,
+    });
+    const archTrim = createPBRMaterial({ surface: 'metal', color: 0x777b78, roughness: 0.4 });
+    const wheelWellMaterial = createPBRMaterial({
+      surface: 'rubber',
+      color: 0x111315,
+      roughness: 0.98,
+      side: THREE.DoubleSide,
+    });
+    const archCentres = COACH_AXLES;
+    const archRadius = 0.59;
+    const wheelCentreY = COACH_WHEEL_RADIUS + 0.03;
+    const panelBottom = 0.75;
+    const panelTop = 1.59;
+    const archBottomAt = (z: number): number => {
+      let y = panelBottom;
+      for (const centre of archCentres) {
+        const dz = z - centre;
+        if (Math.abs(dz) < archRadius) {
+          y = Math.max(y, wheelCentreY + Math.sqrt(archRadius * archRadius - dz * dz));
+        }
+      }
+      return y;
+    };
+    const addArchPanel = (side: number, start: number, end: number): void => {
+      const zValues: number[] = [start, end];
+      for (let z = start + 0.12; z < end; z += 0.12) zValues.push(z);
+      for (const centre of archCentres) {
+        for (let i = 0; i <= 16; i++) {
+          const z = centre - archRadius + (archRadius * 2 * i) / 16;
+          if (z > start && z < end) zValues.push(z);
+        }
+      }
+      zValues.sort((a, b) => a - b);
+      const uniqueZ = zValues.filter((z, index) => index === 0 || Math.abs(z - zValues[index - 1]) > 0.001);
+      const positions: number[] = [];
+      const uvs: number[] = [];
+      const indices: number[] = [];
+      const x = side * sideX;
+      for (const z of uniqueZ) {
+        positions.push(x, archBottomAt(z), z, x, panelTop, z);
+        const u = (z - start) / Math.max(0.001, end - start);
+        uvs.push(u, 0, u, 1);
+      }
+      for (let i = 0; i < uniqueZ.length - 1; i++) {
+        const a = i * 2;
+        if (side > 0) indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+        else indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geometry.setIndex(indices);
+      geometry.computeVertexNormals();
+      root.add(new THREE.Mesh(geometry, archPaint));
+    };
+    for (const side of [-1, 1]) {
+      const panelStart = front + 0.21;
+      const panelEnd = back - 0.21;
+      if (side > 0) {
+        addArchPanel(side, panelStart, -5.57);
+        addArchPanel(side, -3.79, panelEnd);
+      } else addArchPanel(side, panelStart, panelEnd);
+
+      for (const centre of archCentres) {
+        const well = new THREE.Mesh(new THREE.CircleGeometry(archRadius - 0.025, 24), wheelWellMaterial);
+        well.rotation.y = Math.PI / 2;
+        well.position.set(side * (sideX - 0.015), wheelCentreY, centre);
+        root.add(well);
+
+        const points: THREE.Vector3[] = [];
+        const startAngle = Math.asin((panelBottom - wheelCentreY) / archRadius);
+        for (let i = 0; i <= 16; i++) {
+          const angle = startAngle + (i / 16) * (Math.PI - startAngle * 2);
+          points.push(new THREE.Vector3(
+            side * (sideX + 0.045),
+            wheelCentreY + Math.sin(angle) * archRadius,
+            centre + Math.cos(angle) * archRadius,
+          ));
+        }
+        const curve = new THREE.CatmullRomCurve3(points);
+        root.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 20, 0.026, 6, false), archTrim));
+      }
     }
 
     // Roof rain gutter and the slightly proud front/rear caps make the body feel pressed
     // from separate steel panels instead of being one cuboid.
-    add(paintParts, 2.78, 0.2, BUS_LENGTH - 0.1, 0, 3.18, 0, 0x2e3d45);
-    add(trimParts, 0.06, 0.08, BUS_LENGTH - 0.22, -1.39, 3.1, 0, 0x151719);
-    add(trimParts, 0.06, 0.08, BUS_LENGTH - 0.22, 1.39, 3.1, 0, 0x151719);
+    add(paintParts, 2.78, 0.2, BUS_LENGTH - 0.1, 0, ROOF_Y + 0.1, 0, 0x2e3d45);
+    add(trimParts, 0.06, 0.08, BUS_LENGTH - 0.22, -1.39, ROOF_Y + 0.02, 0, 0x151719);
+    add(trimParts, 0.06, 0.08, BUS_LENGTH - 0.22, 1.39, ROOF_Y + 0.02, 0, 0x151719);
     add(paintParts, 2.7, 0.74, 0.16, 0, 1.16, front - 0.06, 0x374852);
-    add(paintParts, 2.7, 0.26, 0.16, 0, 2.98, front - 0.06, 0x2d3d45);
+    add(paintParts, 2.7, 0.26, 0.16, 0, ROOF_Y - 0.1, front - 0.06, 0x2d3d45);
     add(paintParts, 2.7, 0.74, 0.16, 0, 1.16, back + 0.06, 0x33434c);
-    add(paintParts, 2.7, 0.26, 0.16, 0, 2.98, back + 0.06, 0x2c3b43);
+    add(paintParts, 2.7, 0.26, 0.16, 0, ROOF_Y - 0.1, back + 0.06, 0x2c3b43);
 
     // Split windscreen and rear glass. These panes only render from the exterior-facing
     // side, preserving the unobstructed first-person windshield already in the cabin.
     for (const x of [-0.61, 0.61]) {
-      const windscreen = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.1), glassMaterial);
+      const windscreen = new THREE.Mesh(new THREE.PlaneGeometry(1.1, WINDOW_HEIGHT - 0.05), glassMaterial);
       windscreen.rotation.y = Math.PI;
-      windscreen.position.set(x, 2.25, front - 0.15);
+      windscreen.position.set(x, WINDOW_CENTER_Y, front - 0.15);
       root.add(windscreen);
-      const rearGlass = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.04), glassMaterial);
-      rearGlass.position.set(x, 2.23, back + 0.15);
+      const rearGlass = new THREE.Mesh(new THREE.PlaneGeometry(1.1, WINDOW_HEIGHT - 0.05), glassMaterial);
+      rearGlass.position.set(x, WINDOW_CENTER_Y, back + 0.15);
       root.add(rearGlass);
     }
-    add(trimParts, 0.085, 1.28, 0.07, 0, 2.25, front - 0.18, 0x151719);
-    add(trimParts, 0.085, 1.24, 0.07, 0, 2.23, back + 0.18, 0x151719);
+    add(trimParts, 0.085, WINDOW_HEIGHT + 0.08, 0.07, 0, WINDOW_CENTER_Y, front - 0.18, 0x151719);
+    add(trimParts, 0.085, WINDOW_HEIGHT + 0.08, 0.07, 0, WINDOW_CENTER_Y, back + 0.18, 0x151719);
     for (const x of [-1.25, 1.25]) {
-      add(trimParts, 0.11, 1.34, 0.07, x, 2.26, front - 0.18, 0x151719);
-      add(trimParts, 0.11, 1.28, 0.07, x, 2.24, back + 0.18, 0x151719);
+      add(trimParts, 0.11, WINDOW_HEIGHT + 0.12, 0.07, x, WINDOW_CENTER_Y, front - 0.18, 0x151719);
+      add(trimParts, 0.11, WINDOW_HEIGHT + 0.12, 0.07, x, WINDOW_CENTER_Y, back + 0.18, 0x151719);
     }
     add(trimParts, 2.66, 0.08, 0.07, 0, 1.63, front - 0.18, 0x151719);
-    add(trimParts, 2.66, 0.08, 0.07, 0, 2.88, front - 0.18, 0x151719);
+    add(trimParts, 2.66, 0.08, 0.07, 0, WINDOW_TOP_Y + 0.04, front - 0.18, 0x151719);
     add(trimParts, 2.66, 0.08, 0.07, 0, 1.64, back + 0.18, 0x151719);
-    add(trimParts, 2.66, 0.08, 0.07, 0, 2.82, back + 0.18, 0x151719);
+    add(trimParts, 2.66, 0.08, 0.07, 0, WINDOW_TOP_Y + 0.04, back + 0.18, 0x151719);
 
     root.add(
       new THREE.Mesh(merged(paintParts, 'exterior paint'), createPBRMaterial({ surface: 'paint', vertexColors: true, roughness: 0.48 })),
@@ -584,7 +791,7 @@ export class Cabin {
     });
     const destination = new THREE.Mesh(new THREE.PlaneGeometry(0.88, 0.17), destinationMaterial);
     destination.rotation.y = Math.PI;
-    destination.position.set(0, 3.0, front - 0.151);
+    destination.position.set(0, ROOF_Y - 0.08, front - 0.151);
     root.add(destination);
 
     // Service hardware and underbody detail become visible at authored stops, where the
@@ -615,17 +822,17 @@ export class Cabin {
     root.add(exhaust);
     const exhaustTip = new THREE.Mesh(new THREE.TorusGeometry(0.062, 0.012, 6, 12), darkMetal);
     exhaustTip.rotation.x = Math.PI / 2;
-    exhaustTip.position.set(-1.18, 3.08, back - 0.5);
+    exhaustTip.position.set(-1.18, ROOF_Y, back - 0.5);
     root.add(exhaustTip);
 
     // Roof ventilation pods and rear engine cooling louvres.
     for (const z of [-1.8, 1.65]) {
       const pod = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.13, 1.05), createPBRMaterial({ surface: 'paint', color: 0x303a3e, roughness: 0.62 }));
-      pod.position.set(0, 3.32, z);
+      pod.position.set(0, ROOF_Y + 0.24, z);
       root.add(pod);
       for (let i = -3; i <= 3; i++) {
         const vent = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.025, 0.82), darkMetal);
-        vent.position.set(i * 0.09, 3.395, z);
+        vent.position.set(i * 0.09, ROOF_Y + 0.315, z);
         root.add(vent);
       }
     }
@@ -660,12 +867,12 @@ export class Cabin {
 
     // Frame, step and moving leaves belong to one assembly, visible from both sides.
     for (const z of [-5.54, -3.82]) {
-      const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.11, 1.92, 0.065), trim);
-      jamb.position.set(outsideX, 1.98, z);
+      const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.11, 2.3, 0.065), trim);
+      jamb.position.set(outsideX, 2.17, z);
       door.add(jamb);
     }
     const header = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.09, 1.76), trim);
-    header.position.set(outsideX, 2.93, -4.68);
+    header.position.set(outsideX, WINDOW_TOP_Y + 0.06, -4.68);
     // Only a thin sill remains at floor level. Beneath it, shallow treads descend toward
     // the road instead of presenting one tall black block across half the doorway.
     const sill = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.035, 1.76), chrome);
@@ -694,38 +901,38 @@ export class Cabin {
     // make the synchronised movement mechanically legible.
     const cylinder = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.08, 10), chrome);
     cylinder.rotation.x = Math.PI / 2;
-    cylinder.position.set(outsideX - 0.015, 3.02, -4.68);
+    cylinder.position.set(outsideX - 0.015, WINDOW_TOP_Y + 0.17, -4.68);
     // A second cylinder and its mounting brackets face the saloon. The through-shaft is
     // shared with the outer pivots, so the mechanism reads as one real assembly.
     const innerCylinder = cylinder.clone();
     innerCylinder.position.x = sideX - 0.13;
     const innerMechanismPlate = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.16, 1.34), trim);
-    innerMechanismPlate.position.set(sideX - 0.105, 2.98, -4.68);
+    innerMechanismPlate.position.set(sideX - 0.105, WINDOW_TOP_Y + 0.13, -4.68);
     door.add(cylinder, innerMechanismPlate, innerCylinder);
 
     const leafWidth = 0.405;
     // Full-height leaves run from the saloon floor to the header. The previous 1.42 m
     // panels started at window-sill height and looked as though they floated over the step.
-    const leafHeight = 1.84;
-    const leafCentreY = 1.98;
+    const leafHeight = 2.18;
+    const leafCentreY = 2.15;
     const makeLeaf = (direction: number, addHandles: boolean): THREE.Group => {
       const leaf = new THREE.Group();
       const midZ = direction * leafWidth * 0.5;
 
-      const kickPanel = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.5, leafWidth - 0.045), panel);
-      kickPanel.position.set(0, -0.64, midZ);
+      const kickPanel = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.65, leafWidth - 0.045), panel);
+      kickPanel.position.set(0, -0.7, midZ);
       // A cream inset on both faces separates each leaf clearly from the surrounding body.
-      const outerAccent = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.11, leafWidth - 0.09), accent);
-      outerAccent.position.set(0.05, -0.58, midZ);
+      const outerAccent = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.15, leafWidth - 0.09), accent);
+      outerAccent.position.set(0.05, -0.51, midZ);
       const innerAccent = outerAccent.clone();
       innerAccent.position.x = -0.05;
-      const glass = new THREE.Mesh(new THREE.PlaneGeometry(leafWidth - 0.085, 1.08), doorGlass);
+      const glass = new THREE.Mesh(new THREE.PlaneGeometry(leafWidth - 0.085, 1.35), doorGlass);
       glass.rotation.y = Math.PI / 2;
-      glass.position.set(0, 0.22, midZ);
+      glass.position.set(0, 0.34, midZ);
       const topRail = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.075, leafWidth), trim);
       topRail.position.set(0, leafHeight * 0.5 - 0.038, midZ);
       const waistRail = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.085, leafWidth), trim);
-      waistRail.position.set(0, -0.34, midZ);
+      waistRail.position.set(0, -0.36, midZ);
       const bottomRail = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.075, leafWidth), trim);
       bottomRail.position.set(0, -leafHeight * 0.5 + 0.038, midZ);
       leaf.add(kickPanel, outerAccent, innerAccent, glass, topRail, waistRail, bottomRail);
@@ -763,15 +970,15 @@ export class Cabin {
       innerPivot.add(makeLeaf(direction, true));
       outerPivot.add(innerPivot);
 
-      const centreHinge = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 1.78, 9), chrome);
+      const centreHinge = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, leafHeight - 0.06, 9), chrome);
       centreHinge.position.z = direction * leafWidth;
       outerPivot.add(centreHinge);
       const driveArm = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.035, leafWidth * 0.82), chrome);
-      driveArm.position.set(-0.22, 0.93, direction * leafWidth * 0.41);
-      const fixedHinge = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 1.78, 9), chrome);
+      driveArm.position.set(-0.22, leafHeight * 0.5 + 0.02, direction * leafWidth * 0.41);
+      const fixedHinge = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, leafHeight - 0.06, 9), chrome);
       fixedHinge.position.set(-0.04, 0, 0);
       const topCrank = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.03, 12), chrome);
-      topCrank.position.set(-0.18, 0.93, 0);
+      topCrank.position.set(-0.18, leafHeight * 0.5 + 0.02, 0);
       outerPivot.add(driveArm, fixedHinge, topCrank);
 
       door.add(outerPivot);
@@ -819,13 +1026,13 @@ export class Cabin {
 
     for (const x of [-1.14, 1.14]) {
       const sideMarker = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.025), marker);
-      sideMarker.position.set(x, 2.96, front - 0.19);
+      sideMarker.position.set(x, ROOF_Y - 0.12, front - 0.19);
       root.add(sideMarker);
       const rearLamp = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.22, 0.025), tail);
       rearLamp.position.set(x, 1.18, back + 0.205);
       root.add(rearLamp);
       const rearMarker = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.025), marker);
-      rearMarker.position.set(x, 2.96, back + 0.2);
+      rearMarker.position.set(x, ROOF_Y - 0.12, back + 0.2);
       root.add(rearMarker);
     }
 
@@ -868,13 +1075,17 @@ export class Cabin {
     const hubMaterial = createPBRMaterial({ surface: 'metal', color: 0x363a3b, roughness: 0.5 });
     const flapMaterial = createPBRMaterial({ surface: 'rubber', color: 0x121314 });
 
-    for (const z of [-3.72, 3.72]) {
+    for (const z of COACH_AXLES) {
       for (const side of [-1, 1]) {
-        const steering = new THREE.Group();
-        steering.position.set(side * 1.4, COACH_WHEEL_RADIUS + 0.03, z);
+        const mount = new THREE.Group();
+        mount.position.set(side * 1.4, COACH_WHEEL_RADIUS + 0.03, z);
+        // Axle orientation is fixed in its own parent. Wheel spin happens in the child,
+        // so rolling can never masquerade as a rear-wheel steering angle.
+        const axle = new THREE.Group();
+        axle.rotation.z = Math.PI / 2;
         const roll = new THREE.Group();
-        roll.rotation.z = Math.PI / 2;
-        steering.add(roll);
+        axle.add(roll);
+        mount.add(axle);
 
         const tyre = new THREE.Mesh(new THREE.CylinderGeometry(COACH_WHEEL_RADIUS, COACH_WHEEL_RADIUS, 0.25, 12), tyreMaterial);
         roll.add(tyre);
@@ -891,8 +1102,9 @@ export class Cabin {
           bolt.position.set(Math.cos(angle) * 0.19, side * 0.035, Math.sin(angle) * 0.19);
           roll.add(bolt);
         }
-        root.add(steering);
-        this.exteriorWheels.push({ roll, steer: z < 0 ? steering : null });
+        root.add(mount);
+        // Only the front axle receives the steering pivot; the rear mount stays at zero.
+        this.exteriorWheels.push({ roll, steer: z < 0 ? mount : null });
 
         const flap = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.48, 0.38), flapMaterial);
         flap.position.set(side * 1.38, 0.43, z + 0.58);
@@ -950,6 +1162,17 @@ export class Cabin {
     for (const lamp of this.headlampMaterials) {
       lamp.uniforms.uEmissive.value = highBeam ? 2.1 : 1.25;
     }
+  }
+
+  /** Damage is cumulative for the whole shift; this method only changes its presentation. */
+  setDamage(amount: number): void {
+    const damage = THREE.MathUtils.clamp(amount, 0, 1);
+    const crackOpacity = damage <= 0.08 ? 0 : THREE.MathUtils.smoothstep(damage, 0.08, 0.82) * 0.94;
+    (this.windshieldDamage.material as THREE.MeshBasicMaterial).opacity = crackOpacity;
+    (this.exteriorWindshieldDamage.material as THREE.MeshBasicMaterial).opacity = crackOpacity;
+    this.exteriorDamage.visible = damage > 0.05;
+    const deformation = THREE.MathUtils.smoothstep(damage, 0.05, 1);
+    this.exteriorDamage.scale.set(1, 0.84 + deformation * 0.16, 0.72 + deformation * 0.28);
   }
 
   /** Request the folding passenger door to open for an exterior stop or close for departure. */

@@ -182,19 +182,10 @@ const FRAG = /* glsl */ `
       float v = vUv.y;          // metres along the route
       float au = abs(u);
 
-      // asphalt grain, then two ruts polished by forty years of traffic
+      // Fine, even asphalt grain. Route-space cracks, tar repairs and worn ruts were
+      // removed so new defects no longer appear under the coach as the ribbon advances.
       float grain = hash21(floor(vec2(u * 2.7, v * 2.7)));
       albedo *= 0.86 + grain * 0.28;
-      float rut = smoothstep(0.55, 0.0, abs(au - 1.6));
-      albedo *= 1.0 - rut * 0.16;
-
-
-      // Tar repairs and hairline cracks break up the otherwise perfectly clean ribbon.
-      // They are procedural in route space, so they remain fixed to the road while moving.
-      float cell = hash21(floor(vec2(v * 0.115, u * 0.42)));
-      float crackWave = abs(sin(v * (0.38 + cell * 0.16) + sin(u * 2.1) * 1.8));
-      float crack = smoothstep(0.975, 0.998, crackWave) * step(0.69, cell) * step(au, 3.35);
-      albedo *= 1.0 - crack * 0.38;
 
       // Pale aggregate on the shoulder catches the edge of the beam one pebble at a time.
       float shoulder = smoothstep(3.8, 5.8, au) * (1.0 - smoothstep(6.0, 8.0, au));

@@ -4,6 +4,7 @@ import { STATION_SPACING, type RoutePath } from './curvature';
 import { METRES_PER_MILE } from '../core/units';
 import { createRetroMaterial } from '../render/retroMaterial';
 import { canvasTexture } from '../render/textures';
+import { NORA_RED_LOOK } from '../content/passengerLooks';
 
 export interface StopSpec {
   id: 'mile86' | 'closed-gas' | 'millers-gas' | 'highway-patrol' | 'sunset-motel' | 'final-stop';
@@ -84,6 +85,12 @@ export class StoryStops implements Shiftable {
       stop.object.visible = near && stop.placed;
     }
     this.updateDoors(dt);
+  }
+
+  setMile86PassengerVisible(visible: boolean): void {
+    const stop = this.stops.find((candidate) => candidate.spec.id === 'mile86');
+    const nora = stop?.object.getObjectByName('mile86-nora');
+    if (nora) nora.visible = visible;
   }
 
   nearest(mile: number): StopSpec | null {
@@ -313,6 +320,119 @@ export class StoryStops implements Shiftable {
       root.add(person);
     };
 
+    const addNora = (position: THREE.Vector3, faceHeading = 0) => {
+      const person = new THREE.Group();
+      person.name = 'mile86-nora';
+      const dress = createRetroMaterial({ color: NORA_RED_LOOK.dress, ambientBoost: 3.5, snap: 0.32 });
+      const dressDark = createRetroMaterial({ color: NORA_RED_LOOK.dressShadow, ambientBoost: 3.1, snap: 0.34 });
+      const skin = createRetroMaterial({ color: NORA_RED_LOOK.skin, ambientBoost: 3.5, snap: 0.32 });
+      const hair = createRetroMaterial({ color: NORA_RED_LOOK.hair, ambientBoost: 3.7, snap: 0.28 });
+      const hairShadow = createRetroMaterial({ color: NORA_RED_LOOK.hairShadow, ambientBoost: 3, snap: 0.32 });
+      const shoe = createRetroMaterial({ color: NORA_RED_LOOK.shoes, ambientBoost: 2.5, snap: 0.36 });
+
+      // Fixed proportions match the articulated and seated versions rather than a random bystander.
+      const bodice = new THREE.Mesh(new THREE.CylinderGeometry(0.155, 0.205, 0.49, 12), dress);
+      bodice.position.set(0, 1.18, 0);
+      bodice.scale.z = 0.76;
+      person.add(bodice);
+      for (const side of [-1, 1]) {
+        const chest = new THREE.Mesh(new THREE.SphereGeometry(0.095, 14, 9), dress);
+        chest.scale.set(0.9, 0.64, 0.43);
+        chest.position.set(side * 0.074, 1.3, -0.128);
+        person.add(chest);
+      }
+      const skirt = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.32, 0.64, 12), dress);
+      skirt.position.set(0, 0.83, 0.01);
+      skirt.scale.z = 0.8;
+      person.add(skirt);
+      const belt = new THREE.Mesh(new THREE.TorusGeometry(0.177, 0.017, 6, 16), dressDark);
+      belt.rotation.x = Math.PI / 2;
+      belt.scale.z = 0.75;
+      belt.position.y = 1.03;
+      person.add(belt);
+      const neckline = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.011, 7, 20, Math.PI), skin);
+      neckline.position.set(0, 1.43, -0.14);
+      neckline.rotation.set(Math.PI / 2, 0, Math.PI);
+      neckline.scale.y = 0.72;
+      person.add(neckline);
+      const dressSeam = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.39, 0.009), dressDark);
+      dressSeam.position.set(0, 1.2, -0.187);
+      person.add(dressSeam);
+
+      for (const side of [-1, 1]) {
+        const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.05, 0.42, 4, 7), skin);
+        arm.position.set(side * 0.225, 1.12, 0);
+        arm.rotation.z = side * 0.055;
+        person.add(arm);
+        const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.5, 4, 7), skin);
+        leg.position.set(side * 0.095, 0.37, 0);
+        person.add(leg);
+        const heel = new THREE.Mesh(new THREE.SphereGeometry(0.076, 8, 5), shoe);
+        heel.scale.set(0.86, 0.48, 1.48);
+        heel.position.set(side * 0.095, 0.055, -0.045);
+        person.add(heel);
+      }
+
+      const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.072, 0.12, 8), skin);
+      neck.position.y = 1.48;
+      person.add(neck);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 9), skin);
+      head.scale.set(0.88, 1.12, 0.91);
+      head.position.y = 1.67;
+      person.add(head);
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.136, 11, 7, 0, Math.PI * 2, 0, Math.PI * 0.6), hair);
+      cap.position.set(0, 1.715, 0.008);
+      person.add(cap);
+      const back = new THREE.Mesh(new THREE.CapsuleGeometry(0.098, 0.43, 4, 9), hairShadow);
+      back.position.set(0, 1.5, 0.08);
+      back.scale.x = 1.35;
+      person.add(back);
+      const roots = new THREE.Mesh(
+        new THREE.SphereGeometry(0.137, 14, 9, 0, Math.PI * 2, 0, Math.PI * 0.28),
+        createRetroMaterial({ color: NORA_RED_LOOK.hairRoot, ambientBoost: 3, snap: 0.28 }),
+      );
+      roots.position.set(0, 1.723, 0.005);
+      roots.scale.set(0.94, 1.02, 0.95);
+      person.add(roots);
+      const eyeWhite = createRetroMaterial({ color: 0xd8cbb7, ambientBoost: 3.6, snap: 0.22 });
+      const eyeColour = createRetroMaterial({ color: NORA_RED_LOOK.eyes, ambientBoost: 3.5, snap: 0.22 });
+      const browColour = createRetroMaterial({ color: NORA_RED_LOOK.hairRoot, ambientBoost: 3, snap: 0.25 });
+      for (const side of [-1, 1]) {
+        const lock = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.35, 4, 8), hair);
+        lock.position.set(side * 0.115, 1.52, 0.015);
+        lock.rotation.z = side * 0.1;
+        person.add(lock);
+        const highlight = new THREE.Mesh(new THREE.CapsuleGeometry(0.014, 0.27, 3, 6), createRetroMaterial({ color: NORA_RED_LOOK.hairHighlight, ambientBoost: 3.5, snap: 0.24 }));
+        highlight.position.set(side * 0.095, 1.52, -0.02);
+        highlight.rotation.z = side * 0.1;
+        person.add(highlight);
+        const white = new THREE.Mesh(new THREE.SphereGeometry(0.019, 9, 6), eyeWhite);
+        white.scale.set(1.18, 0.55, 0.4);
+        white.position.set(side * 0.045, 1.68, -0.121);
+        person.add(white);
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(0.009, 8, 5), eyeColour);
+        eye.scale.set(1, 0.72, 0.38);
+        eye.position.set(side * 0.045, 1.68, -0.135);
+        person.add(eye);
+        const brow = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.008, 0.008), browColour);
+        brow.position.set(side * 0.045, 1.72, -0.126);
+        brow.rotation.z = side * -0.06;
+        person.add(brow);
+      }
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.045, 8), skin);
+      nose.position.set(0, 1.64, -0.128);
+      nose.rotation.x = -Math.PI / 2;
+      person.add(nose);
+      const lips = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.012, 0.009), createRetroMaterial({ color: NORA_RED_LOOK.lips, ambientBoost: 3.5, snap: 0.25 }));
+      lips.position.set(0, 1.59, -0.126);
+      person.add(lips);
+
+      person.position.copy(position);
+      person.rotation.y = faceHeading;
+      person.scale.set(0.98, 1.035, 1);
+      root.add(person);
+    };
+
     if (spec.id === 'mile86') {
       const shelterLight = createRetroMaterial({ color: 0xffe2a0, mode: 'emissive', emissive: 1.75, snap: 0.3 });
       const benchWood = createRetroMaterial({ color: 0x362c22, ambientBoost: 2.4, snap: 0.4 });
@@ -354,7 +474,7 @@ export class StoryStops implements Shiftable {
       addBox(new THREE.Vector3(0.4, 0.05, 0.4), new THREE.Vector3(-4.55, 0.63, 1.05), metal, undefined, false);
 
       // The player must see the girl before deciding whether she is real.
-      addPerson(new THREE.Vector3(-1.2, 0, -1.35), 0x5b4248);
+      addNora(new THREE.Vector3(-1.2, 0, -1.35));
     } else if (spec.id === 'closed-gas') {
       addBox(new THREE.Vector3(4.6, 2.3, 1.4), new THREE.Vector3(-4.2, 1.15, 1.6), dark, {
         id: 'closed-gas.phone', title: 'DEAD PAY PHONE',

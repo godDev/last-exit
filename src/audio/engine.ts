@@ -143,4 +143,38 @@ export class EngineAudio {
   hiss(duration = 0.7, peak = 0.22): void {
     noiseBurst(this.audio.ctx, this.bus, this.audio.now, duration, 2600, 0.8, peak);
   }
+
+  /** A close oncoming horn, synthesised as the paired electromechanical tones of the era. */
+  trafficHorn(truck: boolean): void {
+    const now = this.audio.now;
+    const frequencies = truck ? [165, 220] : [370, 465];
+    const duration = truck ? 0.82 : 0.58;
+    for (const frequency of frequencies) {
+      const oscillator = this.audio.ctx.createOscillator();
+      oscillator.type = truck ? 'sawtooth' : 'square';
+      oscillator.frequency.setValueAtTime(frequency, now);
+      oscillator.frequency.linearRampToValueAtTime(frequency * 0.985, now + duration);
+      const filter = this.audio.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = truck ? 760 : 1250;
+      const gain = this.audio.ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(truck ? 0.075 : 0.052, now + 0.035);
+      gain.gain.setValueAtTime(truck ? 0.075 : 0.052, now + duration * 0.72);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+      oscillator.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.bus);
+      oscillator.start(now);
+      oscillator.stop(now + duration + 0.03);
+    }
+  }
+
+  /** Low metal/body impact layered with glass and trim noise. */
+  collision(severity: number): void {
+    const strength = Math.max(0.18, Math.min(1, severity));
+    const now = this.audio.now;
+    noiseBurst(this.audio.ctx, this.bus, now, 0.22 + strength * 0.28, 95, 0.62, 0.32 + strength * 0.42, 'brown');
+    noiseBurst(this.audio.ctx, this.bus, now + 0.025, 0.12 + strength * 0.18, 2100, 1.4, 0.08 + strength * 0.17);
+  }
 }

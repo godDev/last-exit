@@ -12,6 +12,7 @@ import { Interactions } from './core/interactions';
 import { MENU_CHECKPOINTS, makeCheckpointSave, type MenuCheckpointId } from './core/checkpoints';
 import { Story, type StoryChoiceScene, type StoryEnding, type StoryStopId } from './core/story';
 import { PassengerDirector } from './story/passengerDirector';
+import { BoardingCutscene } from './story/boardingCutscene';
 import { SEED_ROUTE, mulberry32 } from './core/rng';
 import { settings, saveSettings } from './core/settings';
 import { RoutePath, STATION_SPACING } from './world/curvature';
@@ -106,6 +107,7 @@ const roadsideLights = new RoadsideLights(path);
 scene.add(roadsideLights.group);
 
 const bus = new Bus(path, seed, START_STATION);
+bus.restoreDamage(savedShift?.busDamage ?? 0);
 
 if (savedShift) {
   const resumeStation = START_STATION + Math.floor(savedShift.mile * METRES_PER_MILE / STATION_SPACING);
@@ -116,12 +118,14 @@ if (savedShift) {
 }
 
 const cabin = new Cabin();
+cabin.setDamage(bus.damage);
 scene.add(cabin.group);
 
 const story = new Story(savedShift?.story);
 const roster = new Roster(cabin.passengerRoot);
 const passengerDirector = new PassengerDirector(roster, story);
 passengerDirector.restore();
+const boardingCutscene = new BoardingCutscene(cabin);
 
 const origin = new FloatingOrigin(4000);
 origin.add(path, bus, props, storyStops);
@@ -194,7 +198,7 @@ function returnToMainMenu(): void {
 const pauseMenu = new PauseMenu(() => setPaused(false), restartShift, returnToMainMenu);
 
 function persistShift(): void {
-  story.autosave(bus.miles, clock.minutes);
+  story.autosave(bus.miles, clock.minutes, bus.damage);
 }
 
 function stopMile(stopId: StoryStopId): number {
@@ -281,13 +285,15 @@ const interactions = new Interactions(storyStops, story, hud, (stop) => {
     passengerDirector.mirrorOnly('ray-hollis', 1.4);
     story.evidence('miller.nora-boarded');
     story.flag('miller.returned');
-    hud.say(null,
-      !nora || noraWasMirror
-        ? (settings.lang === 'ru' ? 'В САЛОНЕ КТО-ТО СИДИТ.' : 'SOMEONE IS SITTING IN THE SALOON.')
-        : (settings.lang === 'ru' ? 'НОРА СМОТРИТ НА КАССУ.' : 'NORA IS WATCHING THE FARE BOX.'),
-      null,
-      4,
-    );
+    if (!nora || noraWasMirror) {
+      beginPassengerBoarding(
+        'nora-vale',
+        'NORA VALE',
+        settings.lang === 'ru' ? 'Она проходит в салон и занимает своё место.' : 'She walks into the saloon and takes her seat.',
+      );
+    } else {
+      hud.say(null, settings.lang === 'ru' ? 'НОРА СМОТРИТ НА КАССУ.' : 'NORA IS WATCHING THE FARE BOX.', null, 4);
+    }
   }
   if (stop.id === 'sunset-motel' && story.has('inspected:sunset.manifest') && !story.has('motel.roster-revealed')) {
     for (const profile of PASSENGERS) {
@@ -332,6 +338,24 @@ function openChoice(choiceScene: ChoiceScene, stopId: StoryStopId): void {
   persistShift();
 }
 
+function beginPassengerBoarding(id: string, label: string, completedLine: string): boolean {
+  if (!passengerDirector.board(id)) return false;
+  const figure = passengerDirector.figure(id);
+  if (!figure) return false;
+  heldAtStoryStop = true;
+  engineAudio?.hiss(0.5, 0.14);
+  hud.say(null, settings.lang === 'ru' ? 'ДВЕРИ ОТКРЫВАЮТСЯ — ПОСАДКА' : 'DOORS OPENING — BOARDING', null, 2);
+  const startedBoarding = boardingCutscene.start(figure, () => {
+    heldAtStoryStop = false;
+    story.checkpoint({ kind: 'driving' });
+    engineAudio?.hiss(0.42, 0.12);
+    hud.say(null, label, completedLine, 4);
+    persistShift();
+  });
+  if (!startedBoarding) heldAtStoryStop = false;
+  return startedBoarding;
+}
+
 function showEnding(ending: StoryEnding): void {
   bus.speed = 0;
   paused = true;
@@ -357,14 +381,18 @@ function finishEnding(ending: StoryEnding, picked?: string): void {
 }
 
 function applyChoice(scene: ChoiceScene, picked: string): void {
+  let boardingStarted = false;
   story.choose(scene, picked);
   story.setAct(scene === 'mile86' ? 'mile86' : scene === 'stranded-man' ? 'gas' : scene === 'patrol' ? 'patrol' : 'finale');
 
   if (scene === 'mile86') {
     if (picked === 'board') {
-      passengerDirector.board('nora-vale');
       story.evidence('mile86.nora-boarded');
-      hud.say(null, 'NORA VALE', settings.lang === 'ru' ? 'Она занимает последнее место и не называет имени.' : 'She takes the last seat without giving her name.', 4);
+      boardingStarted = beginPassengerBoarding(
+        'nora-vale',
+        'NORA VALE',
+        settings.lang === 'ru' ? 'Она занимает последнее место и не называет имени.' : 'She takes the last seat without giving her name.',
+      );
     } else if (picked === 'radio') {
       dispatch('dispatch.mile86.radio');
       story.evidence('mile86.dispatch-denial');
@@ -377,9 +405,12 @@ function applyChoice(scene: ChoiceScene, picked: string): void {
     }
   } else if (scene === 'stranded-man') {
     if (picked === 'board') {
-      passengerDirector.board('frank-morrow');
       story.evidence('closed-gas.frank-boarded');
-      hud.say(null, 'STRANDED MAN', settings.lang === 'ru' ? 'Он садится в конце салона и не смотрит в окно.' : 'He sits at the back and does not look out the window.', 4);
+      boardingStarted = beginPassengerBoarding(
+        'frank-morrow',
+        settings.lang === 'ru' ? 'МУЖЧИНА С ОБОЧИНЫ' : 'STRANDED MAN',
+        settings.lang === 'ru' ? 'Он садится в конце салона и не смотрит в окно.' : 'He sits at the back and does not look out the window.',
+      );
     } else if (picked === 'radio') {
       dispatch('dispatch.roadside');
       story.evidence('closed-gas.assistance');
@@ -416,7 +447,7 @@ function applyChoice(scene: ChoiceScene, picked: string): void {
     }
   }
   if (scene === 'patrol') heldByPatrol = false;
-  heldAtStoryStop = false;
+  if (!boardingStarted) heldAtStoryStop = false;
   if (!endingScreen.visible) story.checkpoint({ kind: 'driving' });
   persistShift();
 }
@@ -489,6 +520,10 @@ const headQuat = new THREE.Quaternion();
 function placeCamera(dt: number): void {
   if (interactions.onFoot) {
     interactions.placeCamera(camera, input, dt);
+    return;
+  }
+  if (boardingCutscene.active) {
+    boardingCutscene.placeCamera(camera, dt);
     return;
   }
   if (inspect >= 0) {
@@ -667,10 +702,10 @@ input.on('toggleJournal', () => {
   if (!endingScreen.visible) journal.toggle(story);
 });
 input.on('highBeam', () => {
-  if (!interactions.onFoot && !interactions.transitioning) bus.highBeam = !bus.highBeam;
+  if (!interactions.onFoot && !interactions.transitioning && !boardingCutscene.active) bus.highBeam = !bus.highBeam;
 });
 input.on('autopilot', () => {
-  if (!interactions.onFoot && !interactions.transitioning) bus.autopilot = !bus.autopilot;
+  if (!interactions.onFoot && !interactions.transitioning && !boardingCutscene.active) bus.autopilot = !bus.autopilot;
 });
 input.on('inspect', () => {
   inspect = inspect + 1 >= INSPECT_VIEWS.length ? -1 : inspect + 1;
@@ -680,14 +715,14 @@ input.on('inspect', () => {
   }
 });
 input.on('radioPower', () => {
-  if (!interactions.onFoot && !interactions.transitioning) cabin.dashboard.requestRadioPower();
+  if (!interactions.onFoot && !interactions.transitioning && !boardingCutscene.active) cabin.dashboard.requestRadioPower();
 });
 input.on('radioSeek', () => {
-  if (!interactions.onFoot && !interactions.transitioning) cabin.dashboard.requestRadioSeek(1);
+  if (!interactions.onFoot && !interactions.transitioning && !boardingCutscene.active) cabin.dashboard.requestRadioSeek(1);
 });
 input.on('horn', () => {
   if (interactions.transitioning) return;
-  if (!interactions.onFoot && !interactions.transitioning) {
+  if (!interactions.onFoot && !interactions.transitioning && !boardingCutscene.active) {
     engineAudio?.hiss(0.45, 0.18);
     return;
   }
@@ -916,7 +951,7 @@ const loop = new Loop((dt, elapsed) => {
     recoverInterruptedScene();
     // A player cannot be asked to make a careful narrative decision while the coach
     // quietly rolls past it. Journal and choice screens hold this single-player moment.
-    const narrativeLocked = choices.active || journal.visible;
+    const narrativeLocked = choices.active || journal.visible || boardingCutscene.active;
     if (scriptedStop) updateScriptedStop(dt);
     else if (!interactions.onFoot && !interactions.transitioning && !heldByPatrol && !heldAtStoryStop && !narrativeLocked) bus.update(dt, input);
     clock.syncRoute(bus.miles);
@@ -944,6 +979,8 @@ const loop = new Loop((dt, elapsed) => {
   if (origin.update(bus.position)) road.rebuild();
   props.update(station);
   storyStops.update(bus.miles, dt);
+  storyStops.setMile86PassengerVisible(story.state.choices.mile86 !== 'board');
+  boardingCutscene.update(dt);
 
   // The coach body is approximated by a circle around its centre for roadside props.
   // This is intentionally forgiving at the corners, where a first-person driver cannot
@@ -966,23 +1003,46 @@ const loop = new Loop((dt, elapsed) => {
     engineAudio?.hiss(0.7, 0.28);
     hud.say(null, settings.lang === 'ru' ? 'СТОЛКНОВЕНИЕ' : 'IMPACT', null, 1.15);
   }
-  traffic.update(dt, bus.distance);
+  const trafficFrame = traffic.update(
+    dt,
+    bus,
+    !interactions.onFoot && !interactions.transitioning && !boardingCutscene.active && !scriptedStop && !heldAtStoryStop && !heldByPatrol,
+  );
+  if (trafficFrame.horn) engineAudio?.trafficHorn(trafficFrame.horn === 'truck');
+  if (trafficFrame.impact) {
+    const hit = trafficFrame.impact;
+    if (bus.vehicleImpact(hit.normal, hit.penetration, hit.otherMass, hit.otherAlongSpeed, hit.severity)) {
+      cabin.setDamage(bus.damage);
+      pulseGlitch(0.42 + hit.severity * 0.38);
+      engineAudio?.collision(hit.severity);
+      hud.say(
+        null,
+        settings.lang === 'ru' ? 'АВАРИЯ — АВТОБУС ПОВРЕЖДЁН' : 'CRASH — COACH DAMAGED',
+        null,
+        1.7,
+      );
+      persistShift();
+    }
+  }
 
   cabin.sync(bus.position, bus.heading, bus.pitch, bus.roll);
   cabin.setExteriorMotion(bus.distance, bus.wheelAngle, bus.braking, bus.highBeam);
+  cabin.setDamage(bus.damage);
   // The physical side mirror should never drift into the forward view as a black block.
   // Keep the housing alive for the whole eased camera move, not merely while the physical
   // key is down. This also prevents a black/pop frame when Q is released.
   cabin.leftMirror.mesh.visible = leftMirrorGlance > 0.01 || input.isDown('lookLeft') || leftMirrorLatched;
-  if (choices.active || endingScreen.visible) {
+  if (choices.active || endingScreen.visible || boardingCutscene.active) {
     interactions.updateTransition();
-    hud.prompt(null);
+    hud.prompt(boardingCutscene.active
+      ? (settings.lang === 'ru' ? 'ИДЁТ ПОСАДКА ПАССАЖИРА…' : 'PASSENGER BOARDING…')
+      : null);
   }
   else interactions.update(dt, bus, input);
   // The arms, torso and legs are the player character, not a second seated NPC.
   // Hide them for every on-foot mission and restore them on re-entry to the coach.
   const driverSeated = !interactions.onFoot;
-  const driverAtControls = driverSeated && !interactions.transitioning;
+  const driverAtControls = driverSeated && !interactions.transitioning && !boardingCutscene.active;
   cabin.dashboard.setDriverVisible(driverSeated);
   cabin.dashboard.setDriverControlsEnabled(driverAtControls);
   cabin.setExteriorVisibleToDriver(interactions.onFoot);

@@ -23,6 +23,8 @@ export interface SavedAppearance {
   presence: StoryPresence;
   sway: number;
   eyeshine: number;
+  /** Stable seed for face, build, hair, clothing details and accessories. */
+  lookSeed?: number;
 }
 
 export interface StoryState {
@@ -43,6 +45,8 @@ export interface SaveData {
   story: StoryState;
   mile: number;
   minutes: number;
+  /** Persistent mechanical/cosmetic damage accumulated by the player's coach. */
+  busDamage?: number;
 }
 
 const SAVE_KEY = 'last-exit.route17.autosave.v1';
@@ -108,12 +112,13 @@ export class Story {
     return true;
   }
 
-  autosave(mile: number, minutes: number): void {
+  autosave(mile: number, minutes: number, busDamage = 0): void {
     const data: SaveData = {
       version: 3,
       story: structuredClone(this.state),
       mile: Math.max(0, mile),
       minutes,
+      busDamage: Math.max(0, Math.min(1, Number.isFinite(busDamage) ? busDamage : 0)),
     };
     try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch { /* storage is optional */ }
   }
@@ -145,7 +150,8 @@ export class Story {
         firedEvents: Array.isArray(data.story.firedEvents) ? data.story.firedEvents : [],
         checkpoint: recoverInterruptedScene(savedCheckpoint, flags, Array.isArray(data.story.firedEvents) ? data.story.firedEvents : []),
       };
-      return { version: 3, story: migrated, mile: Math.max(0, mile), minutes };
+      const busDamage = Math.max(0, Math.min(1, Number.isFinite(data.busDamage) ? data.busDamage as number : 0));
+      return { version: 3, story: migrated, mile: Math.max(0, mile), minutes, busDamage };
     } catch { return null; }
   }
 
