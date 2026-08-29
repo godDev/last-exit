@@ -119,6 +119,8 @@ if (savedShift) {
 
 const cabin = new Cabin();
 cabin.setDamage(bus.damage);
+let poleCrackCount = savedShift?.busPoleCracks ?? 0;
+cabin.setPoleCracks(poleCrackCount);
 scene.add(cabin.group);
 
 const story = new Story(savedShift?.story);
@@ -198,7 +200,7 @@ function returnToMainMenu(): void {
 const pauseMenu = new PauseMenu(() => setPaused(false), restartShift, returnToMainMenu);
 
 function persistShift(): void {
-  story.autosave(bus.miles, clock.minutes, bus.damage);
+  story.autosave(bus.miles, clock.minutes, bus.damage, poleCrackCount);
 }
 
 function stopMile(stopId: StoryStopId): number {
@@ -518,6 +520,10 @@ const headEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 const headQuat = new THREE.Quaternion();
 
 function placeCamera(dt: number): void {
+  if (interactions.exitCutsceneActive) {
+    interactions.placeExitCamera(camera);
+    return;
+  }
   if (interactions.onFoot) {
     interactions.placeCamera(camera, input, dt);
     return;
@@ -978,6 +984,8 @@ const loop = new Loop((dt, elapsed) => {
   if (path.ensure(station, ROAD_BEHIND, ROAD_AHEAD)) road.rebuild();
   if (origin.update(bus.position)) road.rebuild();
   props.update(station);
+  props.animate(dt);
+  roadsideLights.update(bus.distance, dt);
   storyStops.update(bus.miles, dt);
   storyStops.setMile86PassengerVisible(story.state.choices.mile86 !== 'board');
   boardingCutscene.update(dt);
@@ -991,11 +999,44 @@ const loop = new Loop((dt, elapsed) => {
   // Holding S at walking speed is an intentional "get me out" action: a cactus or post
   // cannot repeatedly bounce the coach and prevent a reverse manoeuvre.
   const reversingOut = input.isDown('brake') && bus.speed <= 0.3;
-  const propHit = interactions.onFoot || reversingOut
-    ? null
-    : props.collisionAt(collisionProbe, 1.34) ?? props.collisionAt(bus.position, 1.38);
-  const yielded = propHit ? props.knockDown(propHit, bus.forwardVector) : false;
-  if (yielded) {
+  const collisionDisabled = interactions.onFoot || reversingOut;
+  const frontPropHit = collisionDisabled ? null : props.collisionAt(collisionProbe, 1.34);
+  const frontLampHit = collisionDisabled ? null : roadsideLights.collisionAt(collisionProbe, 1.34);
+  const bodyPropHit = collisionDisabled || frontPropHit ? null : props.collisionAt(bus.position, 1.38);
+  const bodyLampHit = collisionDisabled || frontLampHit ? null : roadsideLights.collisionAt(bus.position, 1.38);
+  // Lamp poles and procedural props occupy disjoint roadside bands. Prefer the lamp if
+  // both broad-phase circles overlap due to an extreme off-road angle.
+  const lampHit = frontLampHit ?? bodyLampHit;
+  const propHit = lampHit ? null : frontPropHit ?? bodyPropHit;
+  const obstacleNormal = lampHit?.normal ?? propHit?.normal;
+  const obstaclePenetration = lampHit?.penetration ?? propHit?.penetration ?? 0;
+  const hitAtWindscreen = Boolean(
+    (lampHit ? lampHit === frontLampHit : propHit === frontPropHit)
+    && obstacleNormal
+    && -obstacleNormal.dot(bus.forwardVector) > 0.42,
+  );
+  const hitPole = Boolean(lampHit || propHit?.kind === 'pole');
+  const speedBeforeObstacle = Math.abs(bus.speed);
+  const yielded = lampHit
+    ? roadsideLights.knockDown(lampHit, bus.forwardVector)
+    : propHit ? props.knockDown(propHit, bus.forwardVector) : false;
+
+  if (hitPole && obstacleNormal) {
+    const impacted = bus.impact(obstacleNormal, obstaclePenetration);
+    if (impacted || yielded) {
+      const severity = THREE.MathUtils.clamp(speedBeforeObstacle / 18, 0.2, 1);
+      pulseGlitch(0.4 + severity * 0.2);
+      engineAudio?.collision(severity);
+      hud.say(null, settings.lang === 'ru' ? 'УДАР О СТОЛБ' : 'POLE IMPACT', null, 1.25);
+    }
+    // Only a genuine forward hit at useful speed touches the windscreen crack layer.
+    // Side and rear contacts can topple the pole but never create glass damage.
+    if (impacted && hitAtWindscreen && speedBeforeObstacle > 3) {
+      poleCrackCount = Math.min(8, poleCrackCount + 1);
+      cabin.setPoleCracks(poleCrackCount);
+      persistShift();
+    }
+  } else if (yielded) {
     pulseGlitch(0.34);
     engineAudio?.hiss(0.32, 0.12);
   } else if (propHit && bus.impact(propHit.normal, propHit.penetration)) {
@@ -1033,7 +1074,7 @@ const loop = new Loop((dt, elapsed) => {
   // key is down. This also prevents a black/pop frame when Q is released.
   cabin.leftMirror.mesh.visible = leftMirrorGlance > 0.01 || input.isDown('lookLeft') || leftMirrorLatched;
   if (choices.active || endingScreen.visible || boardingCutscene.active) {
-    interactions.updateTransition();
+    interactions.updateTransition(dt);
     hud.prompt(boardingCutscene.active
       ? (settings.lang === 'ru' ? 'ИДЁТ ПОСАДКА ПАССАЖИРА…' : 'PASSENGER BOARDING…')
       : null);
@@ -1043,9 +1084,12 @@ const loop = new Loop((dt, elapsed) => {
   // Hide them for every on-foot mission and restore them on re-entry to the coach.
   const driverSeated = !interactions.onFoot;
   const driverAtControls = driverSeated && !interactions.transitioning && !boardingCutscene.active;
-  cabin.dashboard.setDriverVisible(driverSeated);
+  // A first-person cutscene turns the camera farther than a real neck would. Hide only
+  // the player's body during that turn so shoulders and arms cannot cross the near plane;
+  // the separately built driver seat and its leather headrest remain in the cabin.
+  cabin.dashboard.setDriverVisible(driverSeated && !boardingCutscene.active && !interactions.exitCutsceneActive);
   cabin.dashboard.setDriverControlsEnabled(driverAtControls);
-  cabin.setExteriorVisibleToDriver(interactions.onFoot);
+  cabin.setExteriorVisibleToDriver(interactions.onFoot || interactions.exitCameraOutside);
   cabin.updateExterior(dt);
   placeCamera(dt);
   // The desert is still a moonlit outdoor space, not a black void. The torch is for
@@ -1055,7 +1099,6 @@ const loop = new Loop((dt, elapsed) => {
   sky.setDawn(Math.pow(clock.nightProgress, 2.5));
   landscape.update(camera);
   dust.update(bus, elapsed);
-  roadsideLights.update(bus.distance);
 
   // the saloon is lit by four tired domes, plus whatever passes the other way
   const glare = traffic.glareAt(bus.distance);

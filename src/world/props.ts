@@ -31,6 +31,9 @@ interface Slot {
   label?: string;
   /** Knocked roadside furniture stays in the world but must no longer block the coach. */
   knocked: boolean;
+  fallElapsed: number;
+  fallStart: THREE.Quaternion;
+  fallTarget: THREE.Quaternion;
 }
 
 export interface PropCollision {
@@ -263,6 +266,7 @@ export class PropField {
   readonly group = new THREE.Group();
   private readonly slots = new Map<Kind, Slot[]>();
   private readonly active = new Map<string, Slot>();
+  private readonly knockedStates = new Map<string, { direction: THREE.Vector3; normal: THREE.Vector3 }>();
   private readonly scrubVariants: THREE.BufferGeometry[];
   private readonly scatterVariants: THREE.BufferGeometry[];
   private lastFirst = Number.NaN;
@@ -328,7 +332,15 @@ export class PropField {
       object.visible = false;
       object.frustumCulled = true;
       this.group.add(object);
-      list.push({ kind, object, free: true, knocked: false });
+      list.push({
+        kind,
+        object,
+        free: true,
+        knocked: false,
+        fallElapsed: 0,
+        fallStart: new THREE.Quaternion(),
+        fallTarget: new THREE.Quaternion(),
+      });
     }
     this.slots.set(kind, list);
   }
@@ -339,6 +351,7 @@ export class PropField {
       if (slot.free) {
         slot.free = false;
         slot.knocked = false;
+        slot.fallElapsed = 0;
         slot.object.visible = true;
         return slot;
       }
@@ -443,6 +456,14 @@ export class PropField {
         slot.object.visible = false;
         continue;
       }
+      const knockedState = this.knockedStates.get(key);
+      if (knockedState) {
+        const shoveDistance = slot.kind === 'pole' ? 0.12 : 0.45;
+        const normalDistance = slot.kind === 'pole' ? 0.08 : 0.28;
+        slot.object.position.addScaledVector(knockedState.direction, shoveDistance);
+        slot.object.position.addScaledVector(knockedState.normal, normalDistance);
+        this.prepareFall(slot, knockedState.direction, true);
+      }
       this.active.set(key, slot);
     }
   }
@@ -476,16 +497,41 @@ export class PropField {
    * object remains visible where it fell, then is reset when it leaves the population window.
    */
   knockDown(hit: PropCollision, direction: THREE.Vector3): boolean {
-    if (hit.kind !== 'delineator' && hit.kind !== 'mile' && hit.kind !== 'sign') return false;
-    const slot = [...this.active.values()].find((candidate) => candidate.object === hit.object);
+    if (hit.kind !== 'pole' && hit.kind !== 'delineator' && hit.kind !== 'mile' && hit.kind !== 'sign') return false;
+    const activeEntry = [...this.active.entries()].find(([, candidate]) => candidate.object === hit.object);
+    const slot = activeEntry?.[1];
     if (!slot || slot.knocked) return false;
-    slot.knocked = true;
     const shove = direction.clone().setY(0).normalize();
-    hit.object.position.addScaledVector(shove, 0.45);
-    hit.object.position.addScaledVector(hit.normal, 0.28);
-    // rotate around its local base: the geometry is anchored at ground level
-    hit.object.rotation.z = hit.normal.x >= 0 ? Math.PI * 0.43 : -Math.PI * 0.43;
+    if (activeEntry) this.knockedStates.set(activeEntry[0], { direction: shove.clone(), normal: hit.normal.clone() });
+    hit.object.position.addScaledVector(shove, hit.kind === 'pole' ? 0.12 : 0.45);
+    hit.object.position.addScaledVector(hit.normal, hit.kind === 'pole' ? 0.08 : 0.28);
+    this.prepareFall(slot, shove, false);
     return true;
+  }
+
+  private prepareFall(slot: Slot, shove: THREE.Vector3, complete: boolean): void {
+    slot.knocked = true;
+    const duration = slot.kind === 'pole' ? 1.2 : 0.72;
+    slot.fallElapsed = complete ? duration : 0;
+    slot.fallStart.copy(slot.object.quaternion);
+    const axis = new THREE.Vector3(shove.z, 0, -shove.x).normalize();
+    const fall = new THREE.Quaternion().setFromAxisAngle(
+      axis,
+      slot.kind === 'pole' ? Math.PI * 0.48 : Math.PI * 0.43,
+    );
+    slot.fallTarget.copy(fall).multiply(slot.fallStart);
+    if (complete) slot.object.quaternion.copy(slot.fallTarget);
+  }
+
+  /** Animate knocked furniture around its ground-level geometry anchor. */
+  animate(dt: number): void {
+    for (const slot of this.active.values()) {
+      if (!slot.knocked) continue;
+      slot.fallElapsed += dt;
+      const duration = slot.kind === 'pole' ? 1.2 : 0.72;
+      const t = THREE.MathUtils.smoothstep(slot.fallElapsed, 0, duration);
+      slot.object.quaternion.copy(slot.fallStart).slerp(slot.fallTarget, t);
+    }
   }
 
   private dress(slot: Slot, index: number, sub: number): boolean {

@@ -203,6 +203,7 @@ export class Dashboard {
   private readonly dialWidth = 0.29;
   private readonly stalk = new THREE.Group();
   private readonly gearStick = new THREE.Group();
+  private readonly driverSeat = new THREE.Group();
   private readonly radioPowerButton = new THREE.Mesh();
   private readonly radioTuneKnob = new THREE.Group();
   private readonly radioPowerHandTarget = new THREE.Object3D();
@@ -567,6 +568,9 @@ export class Dashboard {
     // separate from the dashboard so its silhouette remains readable against the aisle.
     const gearLever = new THREE.Group();
     gearLever.position.set(driverX + 0.48, 1.08, -4.88);
+    // Keep the distinctive long coach shifter, but reduce its overall bulk so it no
+    // longer dominates the driver's right knee and hand in the first-person view.
+    gearLever.scale.setScalar(0.9);
 
     const mount = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.055, 0.24), shell);
     mount.position.y = 0.025;
@@ -795,18 +799,55 @@ export class Dashboard {
   }
 
   private buildDriverSeat(): void {
-    const seat = new THREE.Group();
+    const seat = this.driverSeat;
+    seat.name = 'driver-seat';
     seat.position.set(this.driverX, 0, 0);
+    // The cushion remains visible beneath the first-person thighs. Its authored height
+    // sits below the hip joints, so the driver reads as seated on it rather than floating.
 
-    const brownVinyl = createPBRMaterial({
-      surface: 'fabric',
-      color: 0x4a2e20,
-      roughness: 0.88,
+    const leatherTexture = canvasTexture(256, 256, (ctx, w, h) => {
+      const gradient = ctx.createLinearGradient(0, 0, w, h);
+      gradient.addColorStop(0, '#2b1811');
+      gradient.addColorStop(0.5, '#382018');
+      gradient.addColorStop(1, '#24140f');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, w, h);
+      // Fine pores and irregular grain survive the close camera without looking noisy.
+      for (let i = 0; i < 520; i++) {
+        const x = (i * 73 + (i % 9) * 17) % w;
+        const y = (i * 151 + (i % 13) * 11) % h;
+        const light = i % 5 === 0;
+        ctx.fillStyle = light ? 'rgba(118,75,54,.11)' : 'rgba(8,4,3,.17)';
+        ctx.fillRect(x, y, 1 + (i % 2), 1);
+      }
+      ctx.strokeStyle = 'rgba(15,8,6,.22)';
+      ctx.lineWidth = 1.2;
+      for (let i = 0; i < 13; i++) {
+        const y = 18 + i * 17;
+        ctx.beginPath();
+        ctx.moveTo(12 + (i % 4) * 9, y);
+        ctx.bezierCurveTo(70, y - 4, 154, y + 7, 238, y - 2);
+        ctx.stroke();
+      }
     });
-    const wornVinyl = createPBRMaterial({
-      surface: 'fabric',
-      color: 0x644333,
-      roughness: 0.96,
+    leatherTexture.magFilter = THREE.LinearFilter;
+    leatherTexture.minFilter = THREE.LinearMipmapLinearFilter;
+    leatherTexture.generateMipmaps = true;
+    leatherTexture.needsUpdate = true;
+    const brownLeather = createPBRMaterial({
+      surface: 'leather',
+      color: 0xffffff,
+      map: leatherTexture,
+      roughness: 0.82,
+    });
+    // The cutscene looks almost directly into the headrest at close range. A restrained
+    // cabin shader keeps this dark brown even beneath the brightest dome lamp.
+    const headrestLeather = createRetroMaterial({
+      color: 0x2d1912,
+      fogScale: 0,
+      ambientBoost: 1.45,
+      cabin: 1,
+      snap: 0.12,
     });
     const darkPiping = createPBRMaterial({
       surface: 'rubber',
@@ -847,39 +888,42 @@ export class Dashboard {
       seat.add(rail);
     }
 
-    const pan = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.07, 0.5), frameMetal);
-    pan.position.set(0, 1.2, -4.69);
+    const pan = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.07, 0.7), frameMetal);
+    pan.position.set(0, 1.2, -4.82);
     seat.add(pan);
-    const cushion = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.48, 2, 1, 2), brownVinyl);
-    cushion.position.set(0, 1.295, -4.71);
+    // Extend the cushion under the thighs far enough for its clean brown surface and
+    // front edge to remain visible when the first-person camera looks down.
+    const cushion = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.12, 0.68, 4, 2, 6), brownLeather);
+    cushion.position.set(0, 1.295, -4.84);
     seat.add(cushion);
+    const cushionFront = new THREE.Mesh(new THREE.CapsuleGeometry(0.035, 0.43, 5, 14), brownLeather);
+    cushionFront.rotation.z = Math.PI / 2;
+    cushionFront.position.set(0, 1.35, -5.165);
+    seat.add(cushionFront);
     // Rounded side bolsters soften the square pan silhouette and hold the seated thighs.
     for (const x of [-0.225, 0.225]) {
-      const bolster = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.36, 4, 9), brownVinyl);
+      const bolster = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.53, 5, 12), brownLeather);
       bolster.rotation.x = Math.PI / 2;
-      bolster.position.set(x, 1.365, -4.7);
+      bolster.position.set(x, 1.365, -4.86);
       seat.add(bolster);
     }
-    const cushionWear = new THREE.Mesh(new THREE.BoxGeometry(0.27, 0.009, 0.3), wornVinyl);
-    cushionWear.position.set(0.012, 1.362, -4.735);
-    seat.add(cushionWear);
+    // Keep only clean factory seams: wear patches and artificial compression creases
+    // made the leather look damaged rather than simply textured.
     for (const x of [-0.17, 0.17]) {
-      const seam = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.012, 0.39), darkPiping);
-      seam.position.set(x, 1.368, -4.71);
+      const seam = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.012, 0.56), darkPiping);
+      seam.position.set(x, 1.368, -4.85);
       seat.add(seam);
     }
 
-    // Reclined backrest with a separate worn centre pad, piping and a small headrest.
+    // Reclined backrest with clean piping and a small headrest.
     const backrest = new THREE.Group();
     backrest.position.set(0, 1.32, -4.49);
     backrest.rotation.x = 0.1;
     const backFrame = new THREE.Mesh(new THREE.BoxGeometry(0.49, 0.59, 0.075), frameMetal);
     backFrame.position.y = 0.29;
-    const backPad = new THREE.Mesh(new THREE.BoxGeometry(0.47, 0.56, 0.12, 2, 3, 1), brownVinyl);
+    const backPad = new THREE.Mesh(new THREE.BoxGeometry(0.47, 0.56, 0.12, 4, 5, 2), brownLeather);
     backPad.position.set(0, 0.3, -0.055);
-    const backWear = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.32, 0.012), wornVinyl);
-    backWear.position.set(0.018, 0.31, -0.122);
-    backrest.add(backFrame, backPad, backWear);
+    backrest.add(backFrame, backPad);
     for (const x of [-0.205, 0.205]) {
       const piping = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.49, 0.014), darkPiping);
       piping.position.set(x, 0.3, -0.121);
@@ -890,8 +934,11 @@ export class Dashboard {
       headrestPost.position.set(x, 0.64, -0.015);
       backrest.add(headrestPost);
     }
-    const headrest = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.17, 0.12, 2, 2, 1), brownVinyl);
-    headrest.position.set(0, 0.75, -0.04);
+    const headrest = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.2, 6, 14), headrestLeather);
+    headrest.name = 'driver-seat-headrest';
+    headrest.rotation.z = Math.PI / 2;
+    headrest.scale.z = 0.78;
+    headrest.position.set(0, 0.745, -0.035);
     backrest.add(headrest);
     seat.add(backrest);
 
@@ -935,8 +982,9 @@ export class Dashboard {
       knee.position.copy(this.legMid);
     };
 
-    poseLeg(this.leftThigh, this.leftShin, this.leftKnee, this.leftBoot, this.driverX - 0.12);
-    poseLeg(this.rightThigh, this.rightShin, this.rightKnee, this.rightBoot, this.driverX + 0.12);
+    // A natural seated gap leaves a narrow view of the cushion between both thighs.
+    poseLeg(this.leftThigh, this.leftShin, this.leftKnee, this.leftBoot, this.driverX - 0.145);
+    poseLeg(this.rightThigh, this.rightShin, this.rightKnee, this.rightBoot, this.driverX + 0.145);
   }
 
   private alignLegSegment(mesh: THREE.Mesh, from: THREE.Vector3, to: THREE.Vector3): void {

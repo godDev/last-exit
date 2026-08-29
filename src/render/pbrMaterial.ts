@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export type SurfaceKind = 'paint' | 'metal' | 'rubber' | 'plastic' | 'fabric' | 'glass' | 'asphalt';
+export type SurfaceKind = 'paint' | 'metal' | 'rubber' | 'plastic' | 'fabric' | 'leather' | 'glass' | 'asphalt';
 
 const SURFACES: Record<SurfaceKind, { roughness: number; metalness: number }> = {
   paint: { roughness: 0.42, metalness: 0.08 },
@@ -8,6 +8,7 @@ const SURFACES: Record<SurfaceKind, { roughness: number; metalness: number }> = 
   rubber: { roughness: 0.92, metalness: 0 },
   plastic: { roughness: 0.68, metalness: 0 },
   fabric: { roughness: 1, metalness: 0 },
+  leather: { roughness: 0.78, metalness: 0.01 },
   glass: { roughness: 0.12, metalness: 0.05 },
   asphalt: { roughness: 0.88, metalness: 0.02 },
 };

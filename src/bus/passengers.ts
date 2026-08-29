@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { createRetroMaterial } from '../render/retroMaterial';
-import { seatPosition, FLOOR_Y } from './interior';
+import { seatPosition } from './interior';
 import { setVisibility } from './mirror';
 import { NORA_RED_LOOK, type PassengerLookId } from '../content/passengerLooks';
 
@@ -40,7 +40,7 @@ function merge(parts: THREE.BufferGeometry[], label: string): THREE.BufferGeomet
   return result;
 }
 
-/** Seated clothing, origin on the cushion and facing -Z. */
+/** Seated clothing, origin on the saloon floor and facing -Z. */
 function buildClothes(): THREE.BufferGeometry {
   const parts: THREE.BufferGeometry[] = [
     // A tapered chest and rounded shoulders read much more naturally than the old boxes.
@@ -438,7 +438,6 @@ export class Passenger {
     this.object.add(this.standing.root);
 
     this.basePosition.copy(seatPosition(spec.row, spec.side));
-    this.basePosition.y = FLOOR_Y + 0.5;
     this.object.position.copy(this.basePosition);
   }
 

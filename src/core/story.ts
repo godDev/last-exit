@@ -47,6 +47,8 @@ export interface SaveData {
   minutes: number;
   /** Persistent mechanical/cosmetic damage accumulated by the player's coach. */
   busDamage?: number;
+  /** Frontal pole impacts create their own non-radial windscreen crack layer. */
+  busPoleCracks?: number;
 }
 
 const SAVE_KEY = 'last-exit.route17.autosave.v1';
@@ -112,13 +114,14 @@ export class Story {
     return true;
   }
 
-  autosave(mile: number, minutes: number, busDamage = 0): void {
+  autosave(mile: number, minutes: number, busDamage = 0, busPoleCracks = 0): void {
     const data: SaveData = {
       version: 3,
       story: structuredClone(this.state),
       mile: Math.max(0, mile),
       minutes,
       busDamage: Math.max(0, Math.min(1, Number.isFinite(busDamage) ? busDamage : 0)),
+      busPoleCracks: Math.max(0, Math.min(8, Math.floor(Number.isFinite(busPoleCracks) ? busPoleCracks : 0))),
     };
     try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch { /* storage is optional */ }
   }
@@ -151,7 +154,9 @@ export class Story {
         checkpoint: recoverInterruptedScene(savedCheckpoint, flags, Array.isArray(data.story.firedEvents) ? data.story.firedEvents : []),
       };
       const busDamage = Math.max(0, Math.min(1, Number.isFinite(data.busDamage) ? data.busDamage as number : 0));
-      return { version: 3, story: migrated, mile: Math.max(0, mile), minutes, busDamage };
+      const busPoleCracks = Math.max(0, Math.min(8,
+        Math.floor(Number.isFinite(data.busPoleCracks) ? data.busPoleCracks as number : 0)));
+      return { version: 3, story: migrated, mile: Math.max(0, mile), minutes, busDamage, busPoleCracks };
     } catch { return null; }
   }
 

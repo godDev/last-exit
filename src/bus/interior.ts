@@ -17,6 +17,12 @@ import { Mirror, LAYER_DIRECT_ONLY, LAYER_MIRROR_ONLY, LAYER_WORLD } from './mir
 
 export const FLOOR_Y = 1.05;
 export const ROOF_Y = 3.48;
+export const MIN_PASSENGER_RACK_CLEARANCE = 0.4;
+// Nora's styled hair is the tallest seated silhouette at 1.76 m above the saloon floor.
+// Author the complete rack assembly from this envelope so deck, lip and brackets all
+// preserve the requested 40 cm rather than relying on a visual approximation.
+const MAX_SEATED_PASSENGER_HEIGHT = 1.76;
+const RACK_UNDERSIDE_Y = FLOOR_Y + MAX_SEATED_PASSENGER_HEIGHT + MIN_PASSENGER_RACK_CLEARANCE;
 export const HALF_WIDTH = 1.27;
 export const BUS_LENGTH = 12.2;
 export const DRIVER_X = -0.72;
@@ -121,6 +127,58 @@ function windshieldCrackTexture(): THREE.Texture {
   });
 }
 
+/** Long, narrow stress fractures caused by a pole sliding across laminated glass. */
+function poleStripCrackTexture(count: number): THREE.Texture {
+  return canvasTexture(512, 256, (ctx, w, h) => {
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    const visible = Math.min(8, Math.max(0, count));
+    for (let impact = 0; impact < visible; impact++) {
+      // Stable pseudo-random placement: saved damage redraws identically after a reload.
+      const seed = (impact + 1) * 91.731;
+      const startX = w * (0.14 + ((Math.sin(seed) + 1) * 0.5) * 0.68);
+      const startY = h * (0.2 + ((Math.sin(seed * 1.71) + 1) * 0.5) * 0.58);
+      const direction = -0.72 + ((Math.sin(seed * 2.37) + 1) * 0.5) * 1.44;
+      const length = 105 + ((Math.sin(seed * 3.11) + 1) * 0.5) * 125;
+      const segments = 9;
+      const points: Array<[number, number]> = [];
+      for (let step = 0; step <= segments; step++) {
+        const along = length * step / segments;
+        const kink = Math.sin(seed + step * 2.41) * 5.2;
+        points.push([
+          startX + Math.cos(direction) * along - Math.sin(direction) * kink,
+          startY + Math.sin(direction) * along * 0.62 + Math.cos(direction) * kink,
+        ]);
+      }
+      // Two close fractured edges form a strip, never a radial spider-web impact.
+      for (const offset of [-1.7, 1.7]) {
+        ctx.strokeStyle = offset < 0 ? 'rgba(222,237,240,.8)' : 'rgba(137,159,166,.55)';
+        ctx.lineWidth = offset < 0 ? 1.25 : 0.85;
+        ctx.beginPath();
+        for (let point = 0; point < points.length; point++) {
+          const [x, y] = points[point];
+          const px = x - Math.sin(direction) * offset;
+          const py = y + Math.cos(direction) * offset;
+          if (point === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+      // A few short splinters stay aligned with the band instead of radiating from it.
+      for (const branch of [3, 6]) {
+        const [x, y] = points[branch];
+        const branchAngle = direction + (branch % 2 ? 0.38 : -0.34);
+        ctx.strokeStyle = 'rgba(202,222,228,.58)';
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + Math.cos(branchAngle) * 24, y + Math.sin(branchAngle) * 15);
+        ctx.stroke();
+      }
+    }
+  });
+}
+
 function buildShell(): THREE.BufferGeometry {
   const front = -BUS_LENGTH / 2;
   const back = BUS_LENGTH / 2;
@@ -155,13 +213,13 @@ function buildShell(): THREE.BufferGeometry {
     parts.push(box(0.018, 0.025, length - 1.0, side * 0.23, ROOF_Y - 0.052, 0.2, 0x4b4439));
   }
   for (const side of [-1, 1]) {
-    parts.push(box(0.46, 0.06, length - 3.4, side * 0.98, ROOF_Y - 0.34, midZ + 0.6, TRIM));
-    parts.push(box(0.05, 0.3, length - 3.4, side * 0.75, ROOF_Y - 0.2, midZ + 0.6, TRIM));
+    parts.push(box(0.46, 0.045, length - 3.4, side * 0.98, RACK_UNDERSIDE_Y + 0.0225, midZ + 0.6, TRIM));
+    parts.push(box(0.05, 0.2, length - 3.4, side * 0.75, RACK_UNDERSIDE_Y + 0.12, midZ + 0.6, TRIM));
     // Aluminium rack lip, underside slats and regular suspension brackets.
-    parts.push(box(0.035, 0.075, length - 3.5, side * 0.72, ROOF_Y - 0.36, midZ + 0.6, 0x716b60));
+    parts.push(box(0.035, 0.055, length - 3.5, side * 0.72, RACK_UNDERSIDE_Y + 0.0275, midZ + 0.6, 0x716b60));
     for (let z = front + 2.4; z < back - 0.5; z += 0.82) {
-      parts.push(box(0.46, 0.025, 0.035, side * 0.98, ROOF_Y - 0.37, z, 0x5d574d));
-      parts.push(box(0.035, 0.31, 0.035, side * 0.76, ROOF_Y - 0.2, z, 0x4e4941));
+      parts.push(box(0.46, 0.02, 0.035, side * 0.98, RACK_UNDERSIDE_Y + 0.01, z, 0x5d574d));
+      parts.push(box(0.035, 0.2, 0.035, side * 0.76, RACK_UNDERSIDE_Y + 0.12, z, 0x4e4941));
     }
   }
 
@@ -335,6 +393,9 @@ export class Cabin {
   private readonly exteriorDamage = new THREE.Group();
   private readonly windshieldDamage: THREE.Mesh;
   private readonly exteriorWindshieldDamage: THREE.Mesh;
+  private readonly poleWindshieldDamage: THREE.Mesh;
+  private readonly exteriorPoleWindshieldDamage: THREE.Mesh;
+  private poleCrackCount = 0;
   private exteriorVisibleToDriver = false;
   private doorOpen = 0;
   private doorTarget = 0;
@@ -383,6 +444,29 @@ export class Cabin {
     this.exteriorWindshieldDamage.position.set(0, WINDOW_CENTER_Y, -BUS_LENGTH * 0.5 - 0.205);
     this.exteriorWindshieldDamage.renderOrder = 8;
     this.exteriorDamage.add(this.exteriorWindshieldDamage);
+    const makePoleCracks = (): THREE.Mesh => new THREE.Mesh(
+      new THREE.PlaneGeometry(2.42, WINDOW_HEIGHT - 0.08),
+      new THREE.MeshBasicMaterial({
+        map: poleStripCrackTexture(0),
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      }),
+    );
+    this.poleWindshieldDamage = makePoleCracks();
+    this.poleWindshieldDamage.name = 'interior-pole-strip-cracks';
+    this.poleWindshieldDamage.position.set(0, WINDOW_CENTER_Y, -BUS_LENGTH * 0.5 + 0.035);
+    this.poleWindshieldDamage.layers.set(LAYER_DIRECT_ONLY);
+    this.poleWindshieldDamage.renderOrder = 9;
+    this.exteriorPoleWindshieldDamage = makePoleCracks();
+    this.exteriorPoleWindshieldDamage.name = 'exterior-pole-strip-cracks';
+    this.exteriorPoleWindshieldDamage.position.set(0, WINDOW_CENTER_Y, -BUS_LENGTH * 0.5 - 0.21);
+    this.exteriorPoleWindshieldDamage.renderOrder = 9;
+    // Keep pole glass separate from the dent/broken-lamp group. Otherwise revealing one
+    // strip crack on an otherwise pristine coach would also reveal every crash prop.
+    this.exterior.add(this.exteriorPoleWindshieldDamage);
     this.buildExteriorCollisionDamage(this.exteriorDamage);
     this.exterior.add(this.exteriorDamage);
     // The driver is inside this geometry. Rendering it through the direct camera makes
@@ -399,7 +483,7 @@ export class Cabin {
     // from the cab while the rest of the exterior skin stays out of the first-person view.
     this.passengerDoor.traverse((child) => child.layers.set(LAYER_WORLD));
     const saloonDetails = this.buildSaloonDetails();
-    this.group.add(shell, seats, saloonDetails, this.windshieldDamage, this.exterior);
+    this.group.add(shell, seats, saloonDetails, this.windshieldDamage, this.poleWindshieldDamage, this.exterior);
 
     // A row of tired fluorescent-style fixtures: metal bezel, cloudy diffuser and the
     // emissive panel itself. Six smaller pools read more naturally than four bare planes.
@@ -1173,6 +1257,26 @@ export class Cabin {
     this.exteriorDamage.visible = damage > 0.05;
     const deformation = THREE.MathUtils.smoothstep(damage, 0.05, 1);
     this.exteriorDamage.scale.set(1, 0.84 + deformation * 0.16, 0.72 + deformation * 0.28);
+  }
+
+  /** Restore or append the persistent, non-radial cracks created only by pole impacts. */
+  setPoleCracks(count: number): void {
+    const next = THREE.MathUtils.clamp(Math.floor(count), 0, 8);
+    if (next === this.poleCrackCount) return;
+    this.poleCrackCount = next;
+    const texture = poleStripCrackTexture(next);
+    const interiorMaterial = this.poleWindshieldDamage.material as THREE.MeshBasicMaterial;
+    const exteriorMaterial = this.exteriorPoleWindshieldDamage.material as THREE.MeshBasicMaterial;
+    const oldInteriorMap = interiorMaterial.map;
+    const oldExteriorMap = exteriorMaterial.map;
+    oldInteriorMap?.dispose();
+    if (oldExteriorMap !== oldInteriorMap) oldExteriorMap?.dispose();
+    interiorMaterial.map = texture;
+    exteriorMaterial.map = texture;
+    interiorMaterial.opacity = next > 0 ? 0.94 : 0;
+    exteriorMaterial.opacity = next > 0 ? 0.94 : 0;
+    interiorMaterial.needsUpdate = true;
+    exteriorMaterial.needsUpdate = true;
   }
 
   /** Request the folding passenger door to open for an exterior stop or close for departure. */

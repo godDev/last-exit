@@ -119,6 +119,15 @@ export class BoardingCutscene {
     const passenger = this.passenger;
     if (!passenger) return;
     this.eyeWorld.copy(EYE_LOCAL);
+    // The driver leans forward and toward the aisle to look around the seat back. Without
+    // this natural movement the camera rotates through the close headrest, making even a
+    // dark material expand into a bright/black clipped polygon during boarding.
+    const cutsceneLean = this.stage === 'returning'
+      ? 1 - THREE.MathUtils.smoothstep(this.returnElapsed, 0.05, 0.72)
+      : 1;
+    this.eyeWorld.x += 0.3 * cutsceneLean;
+    this.eyeWorld.y += 0.035 * cutsceneLean;
+    this.eyeWorld.z -= 0.38 * cutsceneLean;
     this.cabin.group.localToWorld(this.eyeWorld);
     camera.position.copy(this.eyeWorld);
 
